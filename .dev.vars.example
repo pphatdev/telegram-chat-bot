@@ -1,0 +1,25 @@
+# Local secret bindings surfaced through env at runtime during `next dev` and
+# `opennextjs-cloudflare preview`. Copy this file to `.dev.vars` (gitignored)
+# and fill in real values. Never commit `.dev.vars` — production secrets are
+# provisioned via `wrangler secret put <NAME>`.
+
+# Telegram Bot API token issued by @BotFather.
+# Read via: (await getCloudflareContext()).env.TELEGRAM_BOT_TOKEN
+TELEGRAM_BOT_TOKEN=
+
+# Secret expected in the X-Telegram-Bot-Api-Secret-Token header on inbound
+# webhook calls. Reject requests where this header does not match.
+# Generate: openssl rand -hex 32
+WEBHOOK_SECRET=
+
+# 32-byte key (base64) used by the AES-GCM-256 encrypt-at-rest utility to
+# protect bot tokens and user auth tokens stored in D1.
+# Generate: openssl rand -base64 32
+ENCRYPTION_SECRET=
+
+# Public origin the app is reachable at. Telegram fetches media through this
+# URL when we send photo/document broadcasts. In local dev this is your
+# Cloudflare Tunnel or ngrok URL (must be HTTPS, publicly reachable). In
+# production, the deployed workers.dev / custom domain.
+# Example dev value: https://my-bot.trycloudflare.com
+PUBLIC_APP_URL=

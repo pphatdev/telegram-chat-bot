@@ -1,6 +1,4 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# Dependencies
 /node_modules
 /.pnp
 .pnp.*
@@ -10,37 +8,71 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-
-# next.js
+# Next.js build output
 /.next/
 /out/
 
-# production
-/build
+# OpenNext & Cloudflare Workers
+/.open-next/
+/.wrangler/
+/cloudflare-env.d.ts
 
-# misc
-.DS_Store
-*.pem
+# Production & Build outputs
+/build/
+/dist/
+/dist-check/
 
-# debug
+# Environment variables & secrets (Never commit sensitive credentials)
+.env
+.env*.local
+.env.production
+.env.development
+.dev.vars
+!.env.example
+!.dev.vars.example
+
+# Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
-# env files (can opt-in for committing if needed)
-.env*
+# Testing & Coverage
+/coverage/
+/.nyc_output/
 
-# vercel
-.vercel
-
-# typescript
+# TypeScript
 *.tsbuildinfo
 next-env.d.ts
 
-.agents
-.claude
-claude.md
-agents.md
+# IDE & Editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# System & OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.pem
+
+# AI & Agent configurations
+.agents/
+.claude/
+AGENTS.md
+
+
+.env.vars

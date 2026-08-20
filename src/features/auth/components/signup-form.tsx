@@ -1,154 +1,216 @@
 "use client";
 
-import React, { useState } from 'react';
-import { Loader2 } from 'lucide-react';
-import Link from 'next/link';
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import React, { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { Loader2 } from "lucide-react";
+import Link from "next/link";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldSeparator,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+    Field,
+    FieldDescription,
+    FieldGroup,
+    FieldLabel,
+    FieldSeparator,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { signup } from "@/features/auth/actions";
+import { signupSchema, type SignupInput } from "@/features/auth/schemas";
 
 export function SignupForm({
-  className,
-  ...props
+    className,
+    ...props
 }: React.ComponentProps<"div">) {
-  const [isLoading, setIsLoading] = useState(false);
-  const [name, setName] = useState('');
-  const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const {
+        register,
+        handleSubmit,
+        setError,
+        formState: { errors, isValid },
+    } = useForm<SignupInput>({
+        resolver: zodResolver(signupSchema),
+        mode: "onBlur",
+        defaultValues: {
+            name: "",
+            username: "",
+            email: "",
+            apiKey: "",
+            password: "",
+            confirmPassword: "",
+        },
+    });
 
-  const handleSignup = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (name && username && email && apiKey && password.length >= 6 && password === confirmPassword) {
-      setIsLoading(true);
-      // Simulate API call to register
-      setTimeout(() => {
+    const onSubmit = async (values: SignupInput) => {
+        setIsLoading(true);
+        const result = await signup(values);
+        if (result.ok) {
+            window.location.href = "/";
+            return;
+        }
         setIsLoading(false);
-        window.location.href = '/login'; // redirect to login on success
-      }, 1500);
-    }
-  };
+        if (result.field === "email" || result.field === "username" || result.field === "apiKey") {
+            setError(result.field, { type: "server", message: result.error });
+        } else {
+            toast.error(result.error);
+        }
+    };
 
-  return (
-    <div className={cn("flex flex-col gap-6 w-full max-w-4xl mx-auto animate-in fade-in zoom-in-95 duration-500", className)} {...props}>
-      <Card className="overflow-hidden p-0 shadow-2xl border-white/10 dark:bg-black/20 backdrop-blur-xl">
-        <CardContent className="grid p-0 md:grid-cols-5 h-full">
-          <form onSubmit={handleSignup} className="p-6 md:p-8 md:col-span-3">
-            <FieldGroup>
-              <div className="flex flex-col items-center gap-2 text-center mb-2">
-                <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
-                <p className="text-sm text-balance text-muted-foreground">
-                  Join the platform to manage your Telegram bots
-                </p>
-              </div>
+    const inputClasses =
+        "bg-black/5 dark:bg-white/5 border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]";
 
-              <Field className="grid grid-cols-2 gap-4">
-                <Field>
-                  <FieldLabel htmlFor="name">Full Name</FieldLabel>
-                  <Input id="name" type="text" value={name} onChange={(e) => setName(e.target.value)} required className="bg-black/5 dark:bg-white/5 border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]" />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="username">Username</FieldLabel>
-                  <Input id="username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} required className="bg-black/5 dark:bg-white/5 border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]" />
-                </Field>
-              </Field>
+    return (
+        <div className={cn("flex flex-col gap-6 w-full max-w-4xl mx-auto animate-in fade-in zoom-in-95 duration-500", className)} {...props}>
+            <Card className="overflow-hidden p-0 shadow-2xl border-white/10 dark:bg-black/20 backdrop-blur-xl">
+                <CardContent className="grid p-0 md:grid-cols-5 h-full">
+                    <form onSubmit={handleSubmit(onSubmit)} noValidate className="p-6 md:p-8 md:col-span-3">
+                        <FieldGroup>
+                            <div className="flex flex-col items-center gap-2 text-center mb-2">
+                                <h1 className="text-2xl font-bold tracking-tight">Create your account</h1>
+                                <p className="text-sm text-balance text-muted-foreground">
+                                    Join the platform to manage your Telegram bots
+                                </p>
+                            </div>
 
-              <Field className="grid grid-cols-2 gap-4">
-                <Field>
-                  <FieldLabel htmlFor="email">Email</FieldLabel>
-                  <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="bg-black/5 dark:bg-white/5 border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]" />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="apikey">API Key</FieldLabel>
-                  <Input id="apikey" type="text" placeholder="1234567890:AAHdq..." value={apiKey} onChange={(e) => setApiKey(e.target.value)} required className="bg-black/5 dark:bg-white/5 border-white/10 font-mono shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]" />
-                </Field>
-              </Field>
+                            <Field className="grid grid-cols-2 gap-4">
+                                <Field>
+                                    <FieldLabel htmlFor="name">Full Name</FieldLabel>
+                                    <Input
+                                        id="name"
+                                        type="text"
+                                        aria-invalid={!!errors.name}
+                                        className={inputClasses}
+                                        {...register("name")}
+                                    />
+                                    {errors.name && <FieldDescription className="text-destructive">{errors.name.message}</FieldDescription>}
+                                </Field>
+                                <Field>
+                                    <FieldLabel htmlFor="username">Username</FieldLabel>
+                                    <Input
+                                        id="username"
+                                        type="text"
+                                        aria-invalid={!!errors.username}
+                                        className={inputClasses}
+                                        {...register("username")}
+                                    />
+                                    {errors.username && <FieldDescription className="text-destructive">{errors.username.message}</FieldDescription>}
+                                </Field>
+                            </Field>
 
-              <Field>
-                <Field className="grid grid-cols-2 gap-4">
-                  <Field>
-                    <FieldLabel htmlFor="password">Password</FieldLabel>
-                    <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} className="bg-black/5 dark:bg-white/5 border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset]" />
-                  </Field>
-                  <Field>
-                    <FieldLabel htmlFor="confirm-password">
-                      Confirm Password
-                    </FieldLabel>
-                    <Input id="confirm-password" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required minLength={6} className={`bg-black/5 dark:bg-white/5 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset] ${confirmPassword && password !== confirmPassword ? 'border-destructive focus:border-destructive focus-visible:ring-destructive' : 'border-white/10'}`} />
-                  </Field>
-                </Field>
-                {confirmPassword && password !== confirmPassword && (
-                  <p className="text-[0.8rem] text-destructive font-medium mt-1">Passwords do not match.</p>
-                )}
-                <FieldDescription>
-                  Must be at least 6 characters long.
-                </FieldDescription>
-              </Field>
+                            <Field className="grid grid-cols-2 gap-4">
+                                <Field>
+                                    <FieldLabel htmlFor="email">Email</FieldLabel>
+                                    <Input
+                                        id="email"
+                                        type="email"
+                                        aria-invalid={!!errors.email}
+                                        className={inputClasses}
+                                        {...register("email")}
+                                    />
+                                    {errors.email && <FieldDescription className="text-destructive">{errors.email.message}</FieldDescription>}
+                                </Field>
+                                <Field>
+                                    <FieldLabel htmlFor="apikey">API Key</FieldLabel>
+                                    <Input
+                                        id="apikey"
+                                        type="text"
+                                        placeholder="1234567890:AAHdq..."
+                                        aria-invalid={!!errors.apiKey}
+                                        className={`${inputClasses} font-mono`}
+                                        {...register("apiKey")}
+                                    />
+                                    {errors.apiKey && <FieldDescription className="text-destructive">{errors.apiKey.message}</FieldDescription>}
+                                </Field>
+                            </Field>
 
-              <Field>
-                <Button type="submit" disabled={isLoading || !name || !username || !email || !apiKey || password.length < 6 || password !== confirmPassword} className="w-full mt-2 bg-primary hover:bg-primary/90">
-                  {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                  Create Account
-                </Button>
-              </Field>
+                            <Field>
+                                <Field className="grid grid-cols-2 gap-4">
+                                    <Field>
+                                        <FieldLabel htmlFor="password">Password</FieldLabel>
+                                        <Input
+                                            id="password"
+                                            type="password"
+                                            aria-invalid={!!errors.password}
+                                            className={inputClasses}
+                                            {...register("password")}
+                                        />
+                                        {errors.password && <FieldDescription className="text-destructive">{errors.password.message}</FieldDescription>}
+                                    </Field>
+                                    <Field>
+                                        <FieldLabel htmlFor="confirm-password">Confirm Password</FieldLabel>
+                                        <Input
+                                            id="confirm-password"
+                                            type="password"
+                                            aria-invalid={!!errors.confirmPassword}
+                                            className={`bg-black/5 dark:bg-white/5 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset] ${errors.confirmPassword ? "border-destructive focus:border-destructive focus-visible:ring-destructive" : "border-white/10"}`}
+                                            {...register("confirmPassword")}
+                                        />
+                                        {errors.confirmPassword && <FieldDescription className="text-destructive">{errors.confirmPassword.message}</FieldDescription>}
+                                    </Field>
+                                </Field>
+                                <FieldDescription>Must be at least 6 characters long.</FieldDescription>
+                            </Field>
 
-              <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card *:data-[slot=field-separator-content]:border-border/50 *:data-[slot=field-separator-content]:rounded-full *:data-[slot=field-separator-content]:border *:data-[slot=field-separator-content]:px-3">
-                Or continue with
-              </FieldSeparator>
-              
-              <Field className="grid grid-cols-3 gap-4">
-                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
-                    <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" fill="currentColor" />
-                  </svg>
-                  <span className="sr-only">Sign up with Apple</span>
-                </Button>
-                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
-                    <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z" fill="currentColor" />
-                  </svg>
-                  <span className="sr-only">Sign up with Google</span>
-                </Button>
-                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
-                    <path d="M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z" fill="currentColor" />
-                  </svg>
-                  <span className="sr-only">Sign up with Meta</span>
-                </Button>
-              </Field>
-              <FieldDescription className="text-center mt-2">
-                Already have an account? <Link href="/login" className="text-primary hover:underline font-medium">Sign in</Link>
-              </FieldDescription>
-            </FieldGroup>
-          </form>
-          <div className="relative hidden bg-muted md:block md:col-span-2">
-            <img
-              src="https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=1000&auto=format&fit=crop"
-              alt="Background"
-              className="absolute inset-0 h-full w-full object-cover dark:brightness-[0.9] dark:grayscale-0"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
-            <div className="absolute bottom-8 left-8 right-8 text-white">
-              <h3 className="text-2xl font-bold mb-2 tracking-tight">Automate Everything</h3>
-              <p className="text-white/80 text-sm">Join thousands of creators who trust BotPanel for their Telegram operations.</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      <FieldDescription className="px-6 text-center">
-        By clicking continue, you agree to our <a href="#" className="hover:underline">Terms of Service</a>{" "}
-        and <a href="#" className="hover:underline">Privacy Policy</a>.
-      </FieldDescription>
-    </div>
-  )
+                            <Field>
+                                <Button
+                                    type="submit"
+                                    disabled={isLoading || !isValid}
+                                    className="w-full mt-2 bg-primary hover:bg-primary/90"
+                                >
+                                    {isLoading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                                    Create Account
+                                </Button>
+                            </Field>
+
+                            <FieldSeparator className="*:data-[slot=field-separator-content]:bg-card *:data-[slot=field-separator-content]:border-border/50 *:data-[slot=field-separator-content]:rounded-full *:data-[slot=field-separator-content]:border *:data-[slot=field-separator-content]:px-3">
+                                Or continue with
+                            </FieldSeparator>
+
+                            <Field className="grid grid-cols-3 gap-4">
+                                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
+                                        <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" fill="currentColor" />
+                                    </svg>
+                                    <span className="sr-only">Sign up with Apple</span>
+                                </Button>
+                                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
+                                        <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z" fill="currentColor" />
+                                    </svg>
+                                    <span className="sr-only">Sign up with Google</span>
+                                </Button>
+                                <Button variant="outline" type="button" className="bg-black/5 dark:bg-white/5 border-white/10 hover:bg-black/10 dark:hover:bg-white/10">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="w-4 h-4">
+                                        <path d="M6.915 4.03c-1.968 0-3.683 1.28-4.871 3.113C.704 9.208 0 11.883 0 14.449c0 .706.07 1.369.21 1.973a6.624 6.624 0 0 0 .265.86 5.297 5.297 0 0 0 .371.761c.696 1.159 1.818 1.927 3.593 1.927 1.497 0 2.633-.671 3.965-2.444.76-1.012 1.144-1.626 2.663-4.32l.756-1.339.186-.325c.061.1.121.196.183.3l2.152 3.595c.724 1.21 1.665 2.556 2.47 3.314 1.046.987 1.992 1.22 3.06 1.22 1.075 0 1.876-.355 2.455-.843a3.743 3.743 0 0 0 .81-.973c.542-.939.861-2.127.861-3.745 0-2.72-.681-5.357-2.084-7.45-1.282-1.912-2.957-2.93-4.716-2.93-1.047 0-2.088.467-3.053 1.308-.652.57-1.257 1.29-1.82 2.05-.69-.875-1.335-1.547-1.958-2.056-1.182-.966-2.315-1.303-3.454-1.303zm10.16 2.053c1.147 0 2.188.758 2.992 1.999 1.132 1.748 1.647 4.195 1.647 6.4 0 1.548-.368 2.9-1.839 2.9-.58 0-1.027-.23-1.664-1.004-.496-.601-1.343-1.878-2.832-4.358l-.617-1.028a44.908 44.908 0 0 0-1.255-1.98c.07-.109.141-.224.211-.327 1.12-1.667 2.118-2.602 3.358-2.602zm-10.201.553c1.265 0 2.058.791 2.675 1.446.307.327.737.871 1.234 1.579l-1.02 1.566c-.757 1.163-1.882 3.017-2.837 4.338-1.191 1.649-1.81 1.817-2.486 1.817-.524 0-1.038-.237-1.383-.794-.263-.426-.464-1.13-.464-2.046 0-2.221.63-4.535 1.66-6.088.454-.687.964-1.226 1.533-1.533a2.264 2.264 0 0 1 1.088-.285z" fill="currentColor" />
+                                    </svg>
+                                    <span className="sr-only">Sign up with Meta</span>
+                                </Button>
+                            </Field>
+                            <FieldDescription className="text-center mt-2">
+                                Already have an account? <Link href="/login" className="text-primary hover:underline font-medium">Sign in</Link>
+                            </FieldDescription>
+                        </FieldGroup>
+                    </form>
+                    <div className="relative hidden bg-muted md:block md:col-span-2">
+                        <img
+                            src="https://images.unsplash.com/photo-1620121692029-d088224ddc74?q=80&w=1000&auto=format&fit=crop"
+                            alt="Background"
+                            className="absolute inset-0 h-full w-full object-cover dark:brightness-[0.9] dark:grayscale-0"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
+                        <div className="absolute bottom-8 left-8 right-8 text-white">
+                            <h3 className="text-2xl font-bold mb-2 tracking-tight">Automate Everything</h3>
+                            <p className="text-white/80 text-sm">Join thousands of creators who trust BotPanel for their Telegram operations.</p>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+            <FieldDescription className="px-6 text-center">
+                By clicking continue, you agree to our <a href="#" className="hover:underline">Terms of Service</a>{" "}
+                and <a href="#" className="hover:underline">Privacy Policy</a>.
+            </FieldDescription>
+        </div>
+    );
 }

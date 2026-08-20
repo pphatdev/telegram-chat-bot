@@ -1,6 +1,11 @@
 import { ArrowLeft, Search, EllipsisVertical, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
 
 interface ChatHeaderProps {
+  title: string;
+  subtitle?: string;
+  avatarText: string;
+  avatarColor: string;
   setMobileView: (view: 'sidebar' | 'chat') => void;
   closeChat?: () => void;
   onProfileClick?: () => void;
@@ -10,7 +15,7 @@ interface ChatHeaderProps {
   setIsSearchOpen: (open: boolean) => void;
 }
 
-export function ChatHeader({ setMobileView, closeChat, onProfileClick, innerSearchQuery, setInnerSearchQuery, isSearchOpen, setIsSearchOpen }: ChatHeaderProps) {
+export function ChatHeader({ title, subtitle, avatarText, avatarColor, setMobileView, closeChat, onProfileClick, innerSearchQuery, setInnerSearchQuery, isSearchOpen, setIsSearchOpen }: ChatHeaderProps) {
   return (
     <header className="flex h-17 min-w-93.75 items-center gap-3  bg-transparent px-4 shadow-sm sm:px-5 overflow-hidden relative z-20">
       <button onClick={() => { setMobileView('sidebar'); if (closeChat) closeChat(); }} aria-label="Back to chats" className="rounded-full p-2 text-muted-foreground hover:bg-accent shrink-0">
@@ -20,11 +25,11 @@ export function ChatHeader({ setMobileView, closeChat, onProfileClick, innerSear
       {isSearchOpen ? (
         <div className="flex-1 flex items-center gap-2 bg-black/5 dark:bg-white/5 border border-white/10 shadow-[0_2px_10px_rgba(0,0,0,0.02)_inset] rounded-[20px] px-3 py-1.5 animate-in fade-in slide-in-from-right-4 duration-200 min-w-0">
           <Search className="w-4 h-4 text-muted-foreground shrink-0" />
-          <input 
-            type="text" 
+          <Input
+            type="text"
             autoFocus
-            placeholder="Search in this chat..." 
-            className="bg-transparent border-none outline-none w-full text-[15px] placeholder:text-muted-foreground"
+            placeholder="Search in this chat..."
+            className="h-auto border-0 bg-transparent p-0 shadow-none text-[15px] focus-visible:ring-0 focus-visible:border-0"
             value={innerSearchQuery}
             onChange={(e) => setInnerSearchQuery(e.target.value)}
           />
@@ -37,10 +42,10 @@ export function ChatHeader({ setMobileView, closeChat, onProfileClick, innerSear
           className="flex min-w-0 flex-1 items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity animate-in fade-in duration-200"
           onClick={onProfileClick}
         >
-          <span className="grid size-10 shrink-0 place-items-center rounded-full bg-sky-500 text-sm font-semibold text-white">QL</span>
+          <span className={`grid size-10 shrink-0 place-items-center rounded-full text-sm font-semibold text-white ${avatarColor}`}>{avatarText}</span>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-[15px] font-semibold">Q3 launch planning</h1>
-            <p className="text-xs text-muted-foreground truncate">online · Group conversation</p>
+            <h1 className="truncate text-[15px] font-semibold">{title}</h1>
+            {subtitle && <p className="text-xs text-muted-foreground truncate">{subtitle}</p>}
           </div>
         </div>
       )}

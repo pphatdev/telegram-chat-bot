@@ -1,7 +1,18 @@
+"use client";
+
 import { ReactNode } from "react";
+import { toast } from "sonner";
 import { Smile, Reply, CornerUpLeft, Copy, Trash2, Edit2 } from "lucide-react";
 import { Bubble, BubbleContent, BubbleReactions } from "@/components/ui/bubble";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+  ContextMenuSeparator,
+} from "@/components/ui/context-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface Reaction {
   emoji: string;
@@ -21,6 +32,8 @@ interface ChatMessageProps {
   onReply?: (author: string, text: string) => void;
 }
 
+const QUICK_REACTIONS = ["👍", "❤️", "😂", "🔥"] as const;
+
 export function ChatMessage({
   align = "start",
   author,
@@ -38,8 +51,16 @@ export function ChatMessage({
   const replyText = text || "Message";
 
   const handleReplyClick = () => {
-    if (onReply) {
-      onReply(authorName, replyText);
+    onReply?.(authorName, replyText);
+  };
+
+  const handleCopy = async () => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Copied to clipboard");
+    } catch {
+      toast.error("Copy failed");
     }
   };
 
@@ -49,81 +70,111 @@ export function ChatMessage({
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger>
-        <div className={`group/msg mb-3 flex items-end gap-2 ${isEnd ? 'relative justify-end' : ''}`}>
-          
-          {!isEnd && authorInitials && (
-            <span className={`grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white ${authorColorClass}`}>
-              {authorInitials}
-            </span>
-          )}
+      <ContextMenuTrigger
+        render={
+          <div className={`group/msg mb-3 flex items-end gap-2 ${isEnd ? 'relative justify-end' : ''}`}>
 
-          <Bubble align={align} variant={isEnd ? "glass-primary" as any : "glass"} className={(isEnd || reactions?.length) ? 'mb-2' : ''}>
-            <BubbleContent className={bubbleClasses}>
-              {!isEnd && author && (
-                <p className={`mb-0.5 text-[13px] font-semibold text-${authorColorClass.split('-')[1]}-500`}>
-                  {author}
-                </p>
-              )}
-              {children || <p>{text}</p>}
-              <span className={`mt-1 block text-[11px] ${isEnd ? 'opacity-70' : 'text-muted-foreground'} text-right`}>
-                {time}
+            {!isEnd && authorInitials && (
+              <span className={`grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold text-white ${authorColorClass}`}>
+                {authorInitials}
               </span>
-            </BubbleContent>
-            
-            {reactions && reactions.length > 0 && (
-              <BubbleReactions side="bottom" align={isEnd ? "start" : "end"} className={isEnd ? "-translate-x-2" : "translate-x-2"}>
-                {reactions.map((r, i) => (
-                  <span key={i} className="flex items-center gap-0.5">
-                    <span className="px-1 text-[11px]">{r.emoji}</span>
-                    {r.count && <span className="px-1 text-[10px] font-medium">{r.count}</span>}
-                  </span>
-                ))}
-              </BubbleReactions>
             )}
-          </Bubble>
 
-          <div className={isEnd ? "absolute right-2 -bottom-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100" : `mb-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 ${reactions?.length ? 'mb-4' : ''}`}>
-            <div className="relative group/react">
-              <button aria-label="React" className={`rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground ${isEnd ? 'bg-background shadow-sm border border-border' : ''}`}>
-                <Smile className="w-4 h-4" />
-              </button>
-              <div className="absolute bottom-full left-1/2 z-50 mb-1 flex -translate-x-1/2 flex-col items-center gap-1 rounded-full bg-card px-1.5 py-2 shadow-md border border-border opacity-0 invisible transition-all group-hover/react:visible group-hover/react:opacity-100 scale-95 group-hover/react:scale-100">
-                <button className="text-lg hover:scale-125 transition-transform py-1">👍</button>
-                <button className="text-lg hover:scale-125 transition-transform py-1">❤️</button>
-                <button className="text-lg hover:scale-125 transition-transform py-1">😂</button>
-                <button className="text-lg hover:scale-125 transition-transform py-1">🔥</button>
-              </div>
+            <Bubble align={align} variant={isEnd ? "glass-primary" : "glass"} className={(isEnd || reactions?.length) ? 'mb-2' : ''}>
+              <BubbleContent className={bubbleClasses}>
+                {!isEnd && author && (
+                  <p className={`mb-0.5 text-[13px] font-semibold text-${authorColorClass.split('-')[1]}-500`}>
+                    {author}
+                  </p>
+                )}
+                {children || <p>{text}</p>}
+                <span className={`mt-1 block text-[11px] ${isEnd ? 'opacity-70' : 'text-muted-foreground'} text-right`}>
+                  {time}
+                </span>
+              </BubbleContent>
+
+              {reactions && reactions.length > 0 && (
+                <BubbleReactions side="bottom" align={isEnd ? "start" : "end"} className={isEnd ? "-translate-x-2" : "translate-x-2"}>
+                  {reactions.map((r, i) => (
+                    <span key={i} className="flex items-center gap-0.5">
+                      <span className="px-1 text-[11px]">{r.emoji}</span>
+                      {r.count && <span className="px-1 text-[10px] font-medium">{r.count}</span>}
+                    </span>
+                  ))}
+                </BubbleReactions>
+              )}
+            </Bubble>
+
+            <div className={isEnd
+              ? "absolute right-2 -bottom-2 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100"
+              : `mb-2 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 ${reactions?.length ? 'mb-4' : ''}`}>
+              <Popover>
+                <PopoverTrigger
+                  aria-label="React"
+                  className={`rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground ${isEnd ? 'bg-background shadow-sm border border-border' : ''}`}
+                >
+                  <Smile className="w-4 h-4" />
+                </PopoverTrigger>
+                <PopoverContent
+                  side="top"
+                  align="center"
+                  className="w-auto flex items-center gap-1 rounded-full px-2 py-1"
+                >
+                  {QUICK_REACTIONS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      type="button"
+                      className="text-lg hover:scale-125 transition-transform px-1"
+                      onClick={() => toast(`Reacted ${emoji}`)}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </PopoverContent>
+              </Popover>
+
+              <Tooltip>
+                <TooltipTrigger
+                  aria-label="Reply"
+                  onClick={handleReplyClick}
+                  className={`rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground ${isEnd ? 'bg-background shadow-sm border border-border' : ''}`}
+                >
+                  <Reply className="w-4 h-4" />
+                </TooltipTrigger>
+                <TooltipContent side="top">Reply</TooltipContent>
+              </Tooltip>
             </div>
-            
-            <button aria-label="Reply" onClick={handleReplyClick} className={`rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground ${isEnd ? 'bg-background shadow-sm border border-border' : ''}`}>
-              <Reply className="w-4 h-4" />
-            </button>
+
           </div>
+        }
+      />
 
+      <ContextMenuContent className="w-48">
+        <div className="flex items-center gap-1 justify-between border-b border-border/50 mb-1 pb-1">
+          {QUICK_REACTIONS.map((emoji) => (
+            <button
+              key={emoji}
+              type="button"
+              className="text-lg hover:scale-125 transition-transform px-1"
+              onClick={() => toast(`Reacted ${emoji}`)}
+            >
+              {emoji}
+            </button>
+          ))}
         </div>
-      </ContextMenuTrigger>
-
-      <ContextMenuContent className="w-48 overflow-visible">
-        <div className="absolute bottom-[calc(100%+8px)] left-0 flex w-full justify-between items-center gap-1 rounded-full bg-popover px-3 py-1.5 shadow-md border border-border">
-          <button className="text-lg hover:scale-125 transition-transform px-1">👍</button>
-          <button className="text-lg hover:scale-125 transition-transform px-1">❤️</button>
-          <button className="text-lg hover:scale-125 transition-transform px-1">😂</button>
-          <button className="text-lg hover:scale-125 transition-transform px-1">🔥</button>
-        </div>
-        <ContextMenuItem onClick={handleReplyClick} className="gap-2 cursor-pointer">
+        <ContextMenuItem onClick={handleReplyClick}>
           <CornerUpLeft className="w-4 h-4" /> Reply
         </ContextMenuItem>
         {isEnd && (
-          <ContextMenuItem className="gap-2 cursor-pointer">
+          <ContextMenuItem>
             <Edit2 className="w-4 h-4" /> Edit
           </ContextMenuItem>
         )}
-        <ContextMenuItem className="gap-2 cursor-pointer">
+        <ContextMenuItem onClick={handleCopy}>
           <Copy className="w-4 h-4" /> Copy Text
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem className="gap-2 text-destructive focus:bg-destructive/10 focus:text-destructive cursor-pointer">
+        <ContextMenuItem variant="destructive">
           <Trash2 className="w-4 h-4" /> Delete
         </ContextMenuItem>
       </ContextMenuContent>

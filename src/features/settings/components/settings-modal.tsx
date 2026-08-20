@@ -1,5 +1,24 @@
-import { Shield, X, User, Bell, Palette, ArrowLeft, Sun, Moon, Monitor, Check, Type, ChevronDown, ChevronRight, Bot, Lock, LogOut, Plus, Smartphone, KeyRound, ShieldCheck, Camera, Copy, Users, Trash2 } from "lucide-react";
+import { Shield, X, User, Bell, Palette, ArrowLeft, Sun, Moon, Monitor, Check, Type, ChevronRight, Bot, Lock, LogOut, Plus, Smartphone, KeyRound, ShieldCheck, Camera, Copy, Users, Trash2 } from "lucide-react";
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  addAllowlistEntry,
+  loadAllowlist,
+  removeAllowlistEntry,
+} from "@/features/settings/actions";
+import { logout } from "@/features/auth/actions";
+import type { AllowlistEntryRow } from "@/db/schema";
+import type { AllowlistListType } from "@/features/settings/queries";
 
 interface SettingsModalProps {
   showSettings: boolean;
@@ -40,7 +59,6 @@ export function SettingsModal({
 
   const [isPasscodeOn, setIsPasscodeOn] = useState(false);
   const [useBiometrics, setUseBiometrics] = useState(false);
-  const [isFontDropdownOpen, setIsFontDropdownOpen] = useState(false);
   const [botName, setBotName] = useState('Kfe Meetup Security Bot');
   const [botDescription, setBotDescription] = useState('Security bot for Kfe Meetup events.');
   const [messagePreview, setMessagePreview] = useState(true);
@@ -48,45 +66,61 @@ export function SettingsModal({
   const [desktopNotifications, setDesktopNotifications] = useState(true);
   
   const [accessListTab, setAccessListTab] = useState<'whitelist' | 'blacklist' | 'keywords' | 'stickers'>('whitelist');
-  const [whitelist, setWhitelist] = useState(['@vip_user_1', '@ceo_boss', '1002348593']);
-  const [blacklist, setBlacklist] = useState(['@spammer_bot', '9483726152']);
-  const [bannedKeywords, setBannedKeywords] = useState(['crypto', 'free money', 'scam']);
-  const [bannedStickers, setBannedStickers] = useState(['CAACAgIAAxkBAAE...']);
+  const [allowlist, setAllowlist] = useState<AllowlistEntryRow[]>([]);
+  const [allowlistLoaded, setAllowlistLoaded] = useState(false);
+  const [allowlistSaving, setAllowlistSaving] = useState(false);
   const [newUserInput, setNewUserInput] = useState('');
 
-  const handleAddUser = () => {
-    if (!newUserInput.trim()) return;
+  /**
+   * UI tabs are plural for display; the DB column stores singular. Keep the
+   * mapping local so the rest of the file can stay tab-centric.
+   */
+  const uiTabToDbType = (tab: typeof accessListTab): AllowlistListType => (
+    tab === 'keywords' ? 'keyword' :
+    tab === 'stickers' ? 'sticker' : tab
+  );
+
+  const currentDbType = uiTabToDbType(accessListTab);
+  const currentEntries = allowlist.filter((e) => e.listType === currentDbType);
+
+  const handleAddUser = async () => {
     const value = newUserInput.trim();
-    if (accessListTab === 'whitelist') setWhitelist([...whitelist, value]);
-    else if (accessListTab === 'blacklist') setBlacklist([...blacklist, value]);
-    else if (accessListTab === 'keywords') setBannedKeywords([...bannedKeywords, value]);
-    else if (accessListTab === 'stickers') setBannedStickers([...bannedStickers, value]);
-    setNewUserInput('');
+    if (!value || allowlistSaving) return;
+    setAllowlistSaving(true);
+    const result = await addAllowlistEntry(currentDbType, value);
+    setAllowlistSaving(false);
+    if (result.ok) {
+      setAllowlist((prev) => [...prev, result.data]);
+      setNewUserInput('');
+    } else {
+      toast.error(result.error);
+    }
   };
 
-  const handleRemoveUser = (item: string) => {
-    if (accessListTab === 'whitelist') setWhitelist(whitelist.filter(u => u !== item));
-    else if (accessListTab === 'blacklist') setBlacklist(blacklist.filter(u => u !== item));
-    else if (accessListTab === 'keywords') setBannedKeywords(bannedKeywords.filter(u => u !== item));
-    else if (accessListTab === 'stickers') setBannedStickers(bannedStickers.filter(u => u !== item));
+  const handleRemoveUser = async (entry: AllowlistEntryRow) => {
+    const snapshot = allowlist;
+    setAllowlist((prev) => prev.filter((e) => e.id !== entry.id));
+    const result = await removeAllowlistEntry(entry.id);
+    if (!result.ok) {
+      setAllowlist(snapshot);
+      toast.error(result.error);
+    }
   };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isFontDropdownOpen) {
-          setIsFontDropdownOpen(false);
-        } else if (viewHistory.length > 1) {
+        if (viewHistory.length > 1) {
           goBack();
         } else if (showSettings) {
           setShowSettings(false);
         }
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isFontDropdownOpen, viewHistory, showSettings]);
+  }, [viewHistory, showSettings, setShowSettings]);
 
   useEffect(() => {
     if (showSettings) {
@@ -95,10 +129,23 @@ export function SettingsModal({
     }
   }, [showSettings, initialView]);
 
+  useEffect(() => {
+    if (!showSettings || allowlistLoaded) return;
+    (async () => {
+      const result = await loadAllowlist();
+      if (result.ok) {
+        setAllowlist(result.data);
+        setAllowlistLoaded(true);
+      } else {
+        toast.error(result.error);
+      }
+    })();
+  }, [showSettings, allowlistLoaded]);
+
   if (!showSettings) return null;
 
   return (
-    <div className="absolute inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-3xl animate-in fade-in slide-in-from-left-8 duration-300" onClick={(e) => { e.stopPropagation(); setIsFontDropdownOpen(false); }}>
+    <div className="absolute inset-0 z-50 flex flex-col bg-background/80 backdrop-blur-3xl animate-in fade-in slide-in-from-left-8 duration-300" onClick={(e) => e.stopPropagation()}>
       <div className="flex-1 w-full p-4 sm:p-5 overflow-y-auto no-scrollbar pb-10">
         <div key={activeSettingsView} className={`w-full ${direction === 'forward' && activeSettingsView !== 'main' ? 'animate-in fade-in slide-in-from-right-8 duration-300' : ''} ${direction === 'backward' ? 'animate-in fade-in slide-in-from-left-8 duration-300' : ''}`}>
         {activeSettingsView === 'main' ? (
@@ -178,8 +225,11 @@ export function SettingsModal({
             </div>
 
             <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm mt-4">
-              <button 
-                onClick={() => window.location.href = '/login'}
+              <button
+                onClick={async () => {
+                  await logout();
+                  window.location.href = '/login';
+                }}
                 className="flex w-full items-center justify-center gap-2 px-4 py-3 hover:bg-destructive/10 transition-colors group"
               >
                 <LogOut className="w-4.5 h-4.5 text-red-500 group-hover:text-red-600 transition-colors" />
@@ -247,30 +297,24 @@ export function SettingsModal({
               <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm">
                 <div className="flex w-full items-center justify-between px-4 py-3.5 border-b border-border/50">
                   <div className="text-[15px] font-medium text-foreground">Desktop Notifications</div>
-                  <button 
-                    className={`w-12 h-7 rounded-full p-1 transition-colors ${desktopNotifications ? 'bg-green-500' : 'bg-black/10 dark:bg-white/10'}`}
-                    onClick={() => setDesktopNotifications(!desktopNotifications)}
-                  >
-                    <div className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform ${desktopNotifications ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
+                  <Switch
+                    checked={desktopNotifications}
+                    onCheckedChange={setDesktopNotifications}
+                  />
                 </div>
                 <div className="flex w-full items-center justify-between px-4 py-3.5 border-b border-border/50">
                   <div className="text-[15px] font-medium text-foreground">Message Preview</div>
-                  <button 
-                    className={`w-12 h-7 rounded-full p-1 transition-colors ${messagePreview ? 'bg-green-500' : 'bg-black/10 dark:bg-white/10'}`}
-                    onClick={() => setMessagePreview(!messagePreview)}
-                  >
-                    <div className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform ${messagePreview ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
+                  <Switch
+                    checked={messagePreview}
+                    onCheckedChange={setMessagePreview}
+                  />
                 </div>
                 <div className="flex w-full items-center justify-between px-4 py-3.5">
                   <div className="text-[15px] font-medium text-foreground">Play Sound</div>
-                  <button 
-                    className={`w-12 h-7 rounded-full p-1 transition-colors ${soundEnabled ? 'bg-green-500' : 'bg-black/10 dark:bg-white/10'}`}
-                    onClick={() => setSoundEnabled(!soundEnabled)}
-                  >
-                    <div className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform ${soundEnabled ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
+                  <Switch
+                    checked={soundEnabled}
+                    onCheckedChange={setSoundEnabled}
+                  />
                 </div>
               </div>
               
@@ -290,32 +334,38 @@ export function SettingsModal({
             </div>
             
             <div className="space-y-6">
-              <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm p-1.5 flex gap-1 overflow-x-auto no-scrollbar">
-                <button 
-                  onClick={() => setAccessListTab('whitelist')}
-                  className={`flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium transition-all ${accessListTab === 'whitelist' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent/50'}`}
-                >
-                  Whitelist
-                </button>
-                <button 
-                  onClick={() => setAccessListTab('blacklist')}
-                  className={`flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium transition-all ${accessListTab === 'blacklist' ? 'bg-destructive text-destructive-foreground shadow-sm' : 'text-muted-foreground hover:bg-accent/50'}`}
-                >
-                  Blacklist
-                </button>
-                <button 
-                  onClick={() => setAccessListTab('keywords')}
-                  className={`flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium transition-all ${accessListTab === 'keywords' ? 'bg-orange-500 text-white shadow-sm' : 'text-muted-foreground hover:bg-accent/50'}`}
-                >
-                  Keywords
-                </button>
-                <button 
-                  onClick={() => setAccessListTab('stickers')}
-                  className={`flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium transition-all ${accessListTab === 'stickers' ? 'bg-purple-500 text-white shadow-sm' : 'text-muted-foreground hover:bg-accent/50'}`}
-                >
-                  Stickers
-                </button>
-              </div>
+              <Tabs
+                value={accessListTab}
+                onValueChange={(v) => setAccessListTab(v as typeof accessListTab)}
+                className="w-full"
+              >
+                <TabsList className="w-full h-auto bg-card/60 backdrop-blur-xl rounded-[24px] border border-white/5 shadow-sm p-1.5 gap-1 overflow-x-auto">
+                  <TabsTrigger
+                    value="whitelist"
+                    className="flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium text-muted-foreground data-active:bg-primary data-active:text-primary-foreground data-active:shadow-sm"
+                  >
+                    Whitelist
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="blacklist"
+                    className="flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium text-muted-foreground data-active:bg-destructive data-active:text-destructive-foreground data-active:shadow-sm"
+                  >
+                    Blacklist
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="keywords"
+                    className="flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium text-muted-foreground data-active:bg-orange-500 data-active:text-white data-active:shadow-sm"
+                  >
+                    Keywords
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="stickers"
+                    className="flex-none rounded-[18px] px-4 py-2 text-[14px] font-medium text-muted-foreground data-active:bg-purple-500 data-active:text-white data-active:shadow-sm"
+                  >
+                    Stickers
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
 
               <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm p-2 flex gap-2">
                 <input 
@@ -328,7 +378,7 @@ export function SettingsModal({
                 />
                 <button 
                   onClick={handleAddUser}
-                  disabled={!newUserInput.trim()}
+                  disabled={!newUserInput.trim() || allowlistSaving}
                   className="bg-primary text-primary-foreground px-4 rounded-xl font-medium text-[14px] hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                   Add
@@ -336,33 +386,32 @@ export function SettingsModal({
               </div>
 
               <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm">
-                {(() => {
-                  const currentList = accessListTab === 'whitelist' ? whitelist : accessListTab === 'blacklist' ? blacklist : accessListTab === 'keywords' ? bannedKeywords : bannedStickers;
-                  return currentList.length === 0 ? (
-                    <div className="p-8 text-center text-muted-foreground text-[14px]">
-                      This list is currently empty.
-                    </div>
-                  ) : (
-                    currentList.map((item, idx, arr) => (
-                      <div key={item} className={`flex items-center justify-between p-4 ${idx !== arr.length - 1 ? 'border-b border-border/50' : ''}`}>
-                        <div className="flex items-center gap-3">
-                          <div className={`grid size-10 place-items-center rounded-full text-white shadow-sm font-medium ${accessListTab === 'whitelist' ? 'bg-green-500' : accessListTab === 'blacklist' ? 'bg-red-500' : accessListTab === 'keywords' ? 'bg-orange-500' : 'bg-purple-500'}`}>
-                            {item.startsWith('@') ? item.charAt(1).toUpperCase() : item.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <div className="text-[15px] font-medium text-foreground truncate max-w-50">{item}</div>
-                            {accessListTab === 'keywords' && item.startsWith('/') && (
-                              <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 text-[10px] font-bold px-2 py-0.5 rounded-[6px]">REGEX</span>
-                            )}
-                          </div>
+                {!allowlistLoaded ? (
+                  <div className="p-8 text-center text-muted-foreground text-[14px]">Loading…</div>
+                ) : currentEntries.length === 0 ? (
+                  <div className="p-8 text-center text-muted-foreground text-[14px]">
+                    This list is currently empty.
+                  </div>
+                ) : (
+                  currentEntries.map((entry, idx, arr) => (
+                    <div key={entry.id} className={`flex items-center justify-between p-4 ${idx !== arr.length - 1 ? 'border-b border-border/50' : ''}`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`grid size-10 place-items-center rounded-full text-white shadow-sm font-medium ${accessListTab === 'whitelist' ? 'bg-green-500' : accessListTab === 'blacklist' ? 'bg-red-500' : accessListTab === 'keywords' ? 'bg-orange-500' : 'bg-purple-500'}`}>
+                          {entry.value.startsWith('@') ? entry.value.charAt(1).toUpperCase() : entry.value.charAt(0).toUpperCase()}
                         </div>
-                        <button onClick={() => handleRemoveUser(item)} className="text-muted-foreground hover:text-destructive transition-colors p-2 hover:bg-destructive/10 rounded-full">
-                          <Trash2 className="w-4.5 h-4.5" />
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <div className="text-[15px] font-medium text-foreground truncate max-w-50">{entry.value}</div>
+                          {accessListTab === 'keywords' && entry.value.startsWith('/') && (
+                            <span className="bg-orange-500/10 text-orange-500 border border-orange-500/20 text-[10px] font-bold px-2 py-0.5 rounded-[6px]">REGEX</span>
+                          )}
+                        </div>
                       </div>
-                    ))
-                  );
-                })()}
+                      <button onClick={() => handleRemoveUser(entry)} className="text-muted-foreground hover:text-destructive transition-colors p-2 hover:bg-destructive/10 rounded-full" aria-label={`Remove ${entry.value}`}>
+                        <Trash2 className="w-4.5 h-4.5" />
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
               
               <div className="text-[13px] text-muted-foreground px-2 leading-relaxed">
@@ -413,47 +462,24 @@ export function SettingsModal({
 
               <div>
                 <div className="text-[13px] uppercase tracking-wider font-semibold text-muted-foreground mb-2 px-3">Font Family</div>
-                <div className="relative">
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setIsFontDropdownOpen(!isFontDropdownOpen); }}
-                    className="flex w-full items-center justify-between gap-2 rounded-2xl bg-card/60 backdrop-blur-xl border border-white/5 px-4 py-3.5 text-[15px] font-medium active:scale-[0.98] transition-transform shadow-sm"
-                  >
+                <Select
+                  value={font}
+                  onValueChange={(v) => handleFontChange(v as typeof font)}
+                >
+                  <SelectTrigger className="w-full h-auto rounded-2xl bg-card/60 backdrop-blur-xl border border-white/5 px-4 py-3.5 text-[15px] font-medium shadow-sm">
                     <div className="flex items-center gap-3">
                       <Type className="w-4 h-4 text-muted-foreground" />
-                      <span style={{ fontFamily: 'var(--font-sans)' }}>
-                        {font === 'inter' && 'Inter (Default)'}
-                        {font === 'geist' && 'Geist Sans'}
-                        {font === 'kantumruy' && 'Kantumruy Pro'}
-                        {font === 'opensans' && 'Open Sans'}
-                        {font === 'sans-serif' && 'Sans Serif'}
-                      </span>
+                      <SelectValue />
                     </div>
-                    <ChevronDown className={`w-4 h-4 text-muted-foreground transition-transform ${isFontDropdownOpen ? 'rotate-180' : ''}`} />
-                  </button>
-                  
-                  {isFontDropdownOpen && (
-                    <div className="absolute top-full left-0 z-50 mt-2 w-full rounded-2xl border border-white/10 bg-background/95 backdrop-blur-3xl p-2 shadow-2xl animate-in fade-in zoom-in-95">
-                      {(
-                        [
-                          { id: 'inter', label: 'Inter', var: 'Inter, sans-serif' },
-                          { id: 'geist', label: 'Geist Sans', var: 'var(--font-geist-sans)' },
-                          { id: 'kantumruy', label: 'Kantumruy Pro', var: 'var(--font-kantumruy-pro)' },
-                          { id: 'opensans', label: 'Open Sans', var: 'var(--font-open-sans)' },
-                          { id: 'sans-serif', label: 'Sans Serif', var: 'sans-serif' }
-                        ] as const
-                      ).map((f) => (
-                        <button 
-                          key={f.id}
-                          onClick={(e) => { e.stopPropagation(); handleFontChange(f.id); setIsFontDropdownOpen(false); }}
-                          className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-[15px] transition-colors ${font === f.id ? 'bg-primary text-primary-foreground' : 'hover:bg-accent/50'}`}
-                        >
-                          <span style={{ fontFamily: f.var }}>{f.label}</span>
-                          {font === f.id && <Check className="w-5 h-5 ml-auto" />}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border border-white/10 bg-background/95 backdrop-blur-3xl">
+                    <SelectItem value="inter"><span style={{ fontFamily: 'Inter, sans-serif' }}>Inter (Default)</span></SelectItem>
+                    <SelectItem value="geist"><span style={{ fontFamily: 'var(--font-geist-sans)' }}>Geist Sans</span></SelectItem>
+                    <SelectItem value="kantumruy"><span style={{ fontFamily: 'var(--font-kantumruy-pro)' }}>Kantumruy Pro</span></SelectItem>
+                    <SelectItem value="opensans"><span style={{ fontFamily: 'var(--font-open-sans)' }}>Open Sans</span></SelectItem>
+                    <SelectItem value="sans-serif"><span style={{ fontFamily: 'sans-serif' }}>Sans Serif</span></SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
@@ -471,24 +497,28 @@ export function SettingsModal({
                 <div className="bg-card/60 backdrop-blur-xl rounded-[24px] border border-white/5 p-5 shadow-sm">
                   <div className="flex items-center gap-4">
                     <span className="text-[12px] font-bold text-muted-foreground">A</span>
-                    <input 
-                      type="range" 
-                      min="0" 
-                      max="9" 
-                      step="1" 
-                      value={[65, 70, 75, 80, 85, 90, 95, 100, 110, 120].indexOf(scale) !== -1 ? [65, 70, 75, 80, 85, 90, 95, 100, 110, 120].indexOf(scale) : 7} 
-                      onChange={(e) => {
+                    <Slider
+                      className="flex-1"
+                      min={0}
+                      max={9}
+                      step={1}
+                      value={(() => {
                         const steps = [65, 70, 75, 80, 85, 90, 95, 100, 110, 120];
-                        handleScaleChange(steps[Number(e.target.value)]);
+                        const i = steps.indexOf(scale);
+                        return [i === -1 ? 7 : i];
+                      })()}
+                      onValueChange={(vals) => {
+                        const steps = [65, 70, 75, 80, 85, 90, 95, 100, 110, 120];
+                        const idx = Array.isArray(vals) ? vals[0] : vals;
+                        handleScaleChange(steps[idx]);
                       }}
-                      className="flex-1 h-2 bg-black/10 dark:bg-white/10 rounded-full appearance-none cursor-pointer outline-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-7 [&::-webkit-slider-thumb]:h-7 [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-[0_2px_8px_rgba(0,0,0,0.3)] [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-gray-300/30 transition-all"
                     />
                     <span className="text-lg font-bold text-muted-foreground">A</span>
                   </div>
                   <div className="flex justify-between text-[10px] font-semibold text-muted-foreground/50 mt-4 px-1">
                     {[65, 70, 75, 80, 85, 90, 95, 100, 110, 120].map((step) => (
-                      <span 
-                        key={step} 
+                      <span
+                        key={step}
                         className={`cursor-pointer hover:text-foreground transition ${scale === step ? 'text-foreground' : ''}`}
                         onClick={() => handleScaleChange(step)}
                       >
@@ -514,12 +544,10 @@ export function SettingsModal({
               <div className="bg-card/60 backdrop-blur-xl rounded-[24px] overflow-hidden border border-white/5 shadow-sm">
                 <div className="flex w-full items-center justify-between px-4 py-3.5">
                   <div className="text-[15px] font-medium text-foreground">Turn Passcode On</div>
-                  <button 
-                    className={`w-12 h-7 rounded-full p-1 transition-colors ${isPasscodeOn ? 'bg-green-500' : 'bg-black/10 dark:bg-white/10'}`}
-                    onClick={() => setIsPasscodeOn(!isPasscodeOn)}
-                  >
-                    <div className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform ${isPasscodeOn ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
+                  <Switch
+                    checked={isPasscodeOn}
+                    onCheckedChange={setIsPasscodeOn}
+                  />
                 </div>
                 {isPasscodeOn && (
                   <div className="animate-in slide-in-from-top-2 fade-in duration-200">
@@ -538,12 +566,10 @@ export function SettingsModal({
                     <div className="h-px w-full bg-border/50" />
                     <div className="flex w-full items-center justify-between px-4 py-3.5">
                       <div className="text-[15px] font-medium text-foreground">Unlock with Biometrics</div>
-                      <button 
-                        className={`w-12 h-7 rounded-full p-1 transition-colors ${useBiometrics ? 'bg-green-500' : 'bg-black/10 dark:bg-white/10'}`}
-                        onClick={() => setUseBiometrics(!useBiometrics)}
-                      >
-                        <div className={`w-5 h-5 bg-white rounded-full shadow-sm transform transition-transform ${useBiometrics ? 'translate-x-5' : 'translate-x-0'}`} />
-                      </button>
+                      <Switch
+                        checked={useBiometrics}
+                        onCheckedChange={setUseBiometrics}
+                      />
                     </div>
                   </div>
                 )}

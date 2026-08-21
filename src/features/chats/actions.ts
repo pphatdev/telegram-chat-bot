@@ -1,9 +1,20 @@
 "use server";
 
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { and, eq } from "drizzle-orm";
 import { getDbAsync } from "@/db/client";
-import { chats, type ChatRow, type MessageRow } from "@/db/schema";
+import { bots, chats, messages, users, type ChatRow, type MessageRow } from "@/db/schema";
 import { readSession } from "@/lib/auth/session";
+import { decrypt } from "@/lib/crypto";
+import { TelegramApiError, TelegramClient } from "@/lib/telegram";
+import {
+    applyBotReaction,
+    botReaction,
+    normalizeReactionEmoji,
+    parseReactionsJson,
+    serializeReactions,
+    type PersistedReaction,
+} from "./reactions";
 import { getChatsForBot, getMessagesForChat } from "./queries";
 
 export type ActionResult<T = void> =
@@ -141,4 +152,112 @@ export async function loadMessages(
   return withOwnedChat(chatId, async ({ chatId }) => {
     return getMessagesForChat(chatId, opts);
   });
+}
+
+export type ReactResult = ActionResult<{ reactions: PersistedReaction[]; ownEmoji: string | null }>;
+
+/**
+ * Set (or clear) the bot's reaction on a message. Ownership-verified through
+ * `messages → chats → bots → users` joins scoped to the session's bot.
+ *
+ * `nextEmoji = null` removes the bot's reaction. Passing the emoji that's
+ * already the bot's current reaction is a no-op on Telegram's side — but we
+ * still re-write the DB row to keep the client + server in sync in case the
+ * caller's optimistic state drifted.
+ *
+ * The Telegram call is fire-once and idempotent: setMessageReaction replaces
+ * the bot's slot atomically, so we don't need a separate "clear then set"
+ * two-step. Local persistence uses `applyBotReaction` so any existing user
+ * counts on the same emoji survive the swap.
+ */
+export async function reactToMessage(
+    dbMessageId: number,
+    nextEmoji: string | null,
+): Promise<ReactResult> {
+    const session = await readSession();
+    if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
+
+    const db = await getDbAsync();
+    const row = await db
+        .select({
+            messageId: messages.id,
+            telegramMessageId: messages.telegramMessageId,
+            reactionsJson: messages.reactionsJson,
+            telegramChatId: chats.telegramChatId,
+            botId: bots.id,
+            botUsername: bots.username,
+            encryptedToken: bots.encryptedToken,
+            debugEnabled: users.debugEnabled,
+        })
+        .from(messages)
+        .innerJoin(chats, eq(chats.id, messages.chatId))
+        .innerJoin(bots, eq(bots.id, chats.botId))
+        .innerJoin(users, eq(users.id, bots.userId))
+        .where(and(eq(messages.id, dbMessageId), eq(chats.botId, session.botId)))
+        .get();
+    if (!row) return { ok: false, error: "Message not found", code: "not_found" };
+    if (!row.telegramMessageId) {
+        return {
+            ok: false,
+            error: "This message has no Telegram id (send failed?) — nothing to react to.",
+            code: "internal",
+        };
+    }
+
+    // Normalize + validate the emoji before hitting Telegram. The Bot API
+    // enforces a fixed allowlist and is strict about VS16 (`❤️` → `❤`) /
+    // 😂-vs-🤣; anything off-list round-trips as `Bad Request:
+    // REACTION_INVALID`. Failing fast here gives a clean toast instead of
+    // a cryptic wire error and saves a network round-trip.
+    let normalized: string | null = null;
+    if (nextEmoji !== null) {
+        normalized = normalizeReactionEmoji(nextEmoji);
+        if (normalized === null) {
+            return {
+                ok: false,
+                error: `Reaction "${nextEmoji}" is not in Telegram's bot-reactions allowlist.`,
+                code: "internal",
+            };
+        }
+    }
+
+    const before = parseReactionsJson(row.reactionsJson);
+    const currentBotEmoji = botReaction(before);
+    if (currentBotEmoji === normalized) {
+        // Already matches — skip the wire call, still return the current state.
+        return { ok: true, data: { reactions: before, ownEmoji: currentBotEmoji } };
+    }
+
+    try {
+        const { env } = await getCloudflareContext({ async: true });
+        const token = await decrypt(row.encryptedToken, env.ENCRYPTION_SECRET);
+        const client = new TelegramClient({
+            token,
+            debug: row.debugEnabled,
+            debugLabel: `bot:${row.botId}${row.botUsername ? `:@${row.botUsername}` : ""}`,
+        });
+        await client.setMessageReaction({
+            chat_id: row.telegramChatId,
+            message_id: row.telegramMessageId,
+            reaction: normalized ? [{ type: "emoji", emoji: normalized }] : [],
+        });
+    } catch (err) {
+        if (err instanceof TelegramApiError) {
+            return { ok: false, error: err.description, code: "internal" };
+        }
+        return {
+            ok: false,
+            error: err instanceof Error ? err.message : "unknown",
+            code: "internal",
+        };
+    }
+
+    const after = applyBotReaction(before, normalized);
+    await db
+        .update(messages)
+        .set({ reactionsJson: serializeReactions(after) })
+        .where(eq(messages.id, dbMessageId))
+        .run();
+
+    return { ok: true, data: { reactions: after, ownEmoji: normalized } };
 }

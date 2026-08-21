@@ -1,6 +1,6 @@
 import { and, count, eq, inArray } from "drizzle-orm";
 import { getDbAsync } from "@/db/client";
-import { allowlistEntries, messages, type AllowlistEntryRow } from "@/db/schema";
+import { allowlistEntries, messages, users, type AllowlistEntryRow } from "@/db/schema";
 
 export type AllowlistListType = "whitelist" | "blacklist" | "keyword" | "sticker";
 
@@ -33,6 +33,40 @@ export interface ChatMessageCounts {
  * are grouped roughly matching the Telegram profile UI conventions.
  * Runs three COUNT(*) queries; cheap on D1 for typical thread sizes.
  */
+export interface PasscodeSettings {
+  enabled: boolean;
+  autoLockMinutes: number;
+}
+
+/**
+ * Read the passcode-lock configuration for a user. Returns the safe
+ * projection only — no hash material.
+ */
+export async function getPasscodeSettings(userId: number): Promise<PasscodeSettings | null> {
+  const db = await getDbAsync();
+  const row = await db
+    .select({ enabled: users.passcodeEnabled, autoLockMinutes: users.autoLockMinutes })
+    .from(users)
+    .where(eq(users.id, userId))
+    .get();
+  return row ? { enabled: row.enabled, autoLockMinutes: row.autoLockMinutes } : null;
+}
+
+/**
+ * Read the debug-logging opt-in flag for a user. Feeds the Settings toggle
+ * that controls whether TelegramClient calls and inbound webhook payloads
+ * are echoed to the Worker's stdout.
+ */
+export async function getDebugEnabled(userId: number): Promise<boolean> {
+  const db = await getDbAsync();
+  const row = await db
+    .select({ debugEnabled: users.debugEnabled })
+    .from(users)
+    .where(eq(users.id, userId))
+    .get();
+  return row?.debugEnabled ?? false;
+}
+
 export async function getChatMessageCounts(chatId: number): Promise<ChatMessageCounts> {
   const db = await getDbAsync();
   const [total, photoVideo, files, audio] = await Promise.all([

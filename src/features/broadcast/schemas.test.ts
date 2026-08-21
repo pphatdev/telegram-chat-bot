@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
     outboundMessageSchema,
+    sendAudioSchema,
     sendDocumentSchema,
     sendPhotoSchema,
+    sendStickerSchema,
     sendTextSchema,
+    sendVideoSchema,
 } from "./schemas";
 
 describe("outboundMessageSchema (discriminated union)", () => {
@@ -30,7 +33,50 @@ describe("outboundMessageSchema (discriminated union)", () => {
     });
 
     it("rejects an unknown kind", () => {
-        const r = outboundMessageSchema.safeParse({ kind: "video", mediaR2Key: "x" });
+        const r = outboundMessageSchema.safeParse({ kind: "location", mediaR2Key: "x" });
+        expect(r.success).toBe(false);
+    });
+
+    it("accepts a video send", () => {
+        const r = outboundMessageSchema.safeParse({
+            kind: "video",
+            mediaR2Key: "media/1/clip.mp4",
+            duration: 30,
+            supportsStreaming: true,
+        });
+        expect(r.success).toBe(true);
+    });
+
+    it("accepts an audio send with performer/title metadata", () => {
+        const r = sendAudioSchema.safeParse({
+            kind: "audio",
+            mediaR2Key: "media/1/song.mp3",
+            performer: "Test",
+            title: "Track",
+        });
+        expect(r.success).toBe(true);
+    });
+
+    it("accepts a sticker send with an emoji hint", () => {
+        const r = sendStickerSchema.safeParse({
+            kind: "sticker",
+            stickerRef: "CAACAgIAAxkBAAExampleStickerFileId",
+            emoji: "🎉",
+        });
+        expect(r.success).toBe(true);
+    });
+
+    it("rejects a sticker send with an empty stickerRef", () => {
+        const r = sendStickerSchema.safeParse({ kind: "sticker", stickerRef: "" });
+        expect(r.success).toBe(false);
+    });
+
+    it("rejects a video with an implausibly long duration", () => {
+        const r = sendVideoSchema.safeParse({
+            kind: "video",
+            mediaR2Key: "media/1/x.mp4",
+            duration: 60 * 60 * 24, // 24h — exceeds max
+        });
         expect(r.success).toBe(false);
     });
 

@@ -3,22 +3,35 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { getDbAsync } from "@/db/client";
-import { broadcasts, chats, type BroadcastRow } from "@/db/schema";
+import {
+    broadcastTargets,
+    broadcasts,
+    chats,
+    type BroadcastRow,
+} from "@/db/schema";
 import { readSession } from "@/lib/auth/session";
 import { dispatchOutboundMessage } from "./dispatcher";
 import { outboundMessageSchema } from "./schemas";
 import { runBroadcast } from "./sweep";
 
 export type SendResult =
-    | { ok: true; messageId: number; telegramMessageId: number }
+    | {
+          ok: true;
+          messageId: number;
+          telegramMessageId: number;
+          /** True when the caller's reply target was gone (deleted from
+           *  Telegram) and we resent as a plain message. Clients should
+           *  surface a note so the sender knows the reply was dropped. */
+          replyDropped?: true;
+      }
     | { ok: false; error: string; code?: string; retryAfterMs?: number };
 
 export type BroadcastCreateResult =
-    | { ok: true; broadcastId: number; runAt: number }
+    | { ok: true; broadcastId: number; runAt: number; duplicate?: boolean }
     | { ok: false; error: string; code?: string };
 
 export type BroadcastDispatchResult =
-    | { ok: true; dispatched: number; failed: number; status: BroadcastRow["status"] }
+    | { ok: true; dispatched: number; failed: number; pending: number; status: BroadcastRow["status"] }
     | { ok: false; error: string; code?: string };
 
 export type BroadcastListResult =
@@ -30,6 +43,13 @@ const createBroadcastInputSchema = z.object({
     targetChatIds: z.array(z.number().int().positive()).min(1).max(500),
     /** Unix seconds. Missing/past values run at the next sweep tick. */
     runAt: z.number().int().positive().optional(),
+    /**
+     * Client-supplied de-duplication key. If a broadcast with the same
+     * `(botId, idempotencyKey)` already exists we short-circuit and return
+     * that broadcastId — safe for React StrictMode double-invokes, retried
+     * form submissions, and PWA re-mounts.
+     */
+    idempotencyKey: z.string().min(1).max(120).optional(),
 });
 
 /**
@@ -67,7 +87,12 @@ export async function sendChatMessage(
     });
 
     if (result.ok) {
-        return { ok: true, messageId: result.messageId, telegramMessageId: result.telegramMessageId };
+        return {
+            ok: true,
+            messageId: result.messageId,
+            telegramMessageId: result.telegramMessageId,
+            ...(result.replyDropped && { replyDropped: true as const }),
+        };
     }
     return userFacingSendError(result);
 }
@@ -80,6 +105,11 @@ export async function sendChatMessage(
  * ID doesn't resolve we reject the whole request rather than silently
  * dropping — safer for large fan-outs where partial acceptance is worse
  * than a clear error.
+ *
+ * Idempotency: if the caller supplies an `idempotencyKey` we look up the
+ * existing row on `(bot_id, idempotency_key)` first and return it unchanged.
+ * A missing key generates a random UUID so every call still lands in a
+ * unique slot.
  *
  * `runAt` semantics:
  *   - Omitted or in the past → treat as "eligible now"; the cron sweep will
@@ -100,6 +130,27 @@ export async function createBroadcast(input: unknown): Promise<BroadcastCreateRe
     }
 
     const db = await getDbAsync();
+
+    // Idempotency short-circuit: if the caller provided a key that already
+    // exists for this bot, return the existing row instead of creating a
+    // second one. Race-safe because the unique index catches the insert
+    // path too (see below).
+    if (parsed.data.idempotencyKey) {
+        const existing = await db
+            .select({ id: broadcasts.id, runAt: broadcasts.runAt })
+            .from(broadcasts)
+            .where(
+                and(
+                    eq(broadcasts.botId, session.botId),
+                    eq(broadcasts.idempotencyKey, parsed.data.idempotencyKey),
+                ),
+            )
+            .get();
+        if (existing) {
+            return { ok: true, broadcastId: existing.id, runAt: existing.runAt, duplicate: true };
+        }
+    }
+
     const ownedRows = await db
         .select({ id: chats.id })
         .from(chats)
@@ -117,26 +168,68 @@ export async function createBroadcast(input: unknown): Promise<BroadcastCreateRe
 
     const now = Math.floor(Date.now() / 1000);
     const runAt = parsed.data.runAt ?? now;
-    const idempotencyKey = crypto.randomUUID();
+    const idempotencyKey = parsed.data.idempotencyKey ?? crypto.randomUUID();
 
-    const inserted = await db
-        .insert(broadcasts)
-        .values({
-            botId: session.botId,
-            idempotencyKey,
-            payloadJson: JSON.stringify(parsed.data.payload),
-            targetsJson: JSON.stringify(parsed.data.targetChatIds.map((chatId) => ({ chatId }))),
-            status: "scheduled",
-            runAt,
-            dispatchedCount: 0,
-            failedCount: 0,
-            createdAt: now,
-        })
-        .returning({ id: broadcasts.id })
-        .get();
+    // Insert the broadcast row. If a concurrent request wins the idempotency
+    // race, the unique index rejects our insert and we recover by fetching
+    // the winner.
+    let insertedId: number | undefined;
+    try {
+        const inserted = await db
+            .insert(broadcasts)
+            .values({
+                botId: session.botId,
+                idempotencyKey,
+                payloadJson: JSON.stringify(parsed.data.payload),
+                targetsJson: JSON.stringify(parsed.data.targetChatIds.map((chatId) => ({ chatId }))),
+                status: "scheduled",
+                runAt,
+                nextAttemptAt: runAt,
+                dispatchedCount: 0,
+                failedCount: 0,
+                createdAt: now,
+            })
+            .returning({ id: broadcasts.id })
+            .get();
+        insertedId = inserted?.id;
+    } catch {
+        // Unique-index collision — recover by returning the existing row.
+        const existing = await db
+            .select({ id: broadcasts.id, runAt: broadcasts.runAt })
+            .from(broadcasts)
+            .where(
+                and(
+                    eq(broadcasts.botId, session.botId),
+                    eq(broadcasts.idempotencyKey, idempotencyKey),
+                ),
+            )
+            .get();
+        if (existing) {
+            return { ok: true, broadcastId: existing.id, runAt: existing.runAt, duplicate: true };
+        }
+        return { ok: false, error: "Failed to persist broadcast", code: "internal" };
+    }
 
-    if (!inserted) return { ok: false, error: "Failed to persist broadcast", code: "internal" };
-    return { ok: true, broadcastId: inserted.id, runAt };
+    if (!insertedId) return { ok: false, error: "Failed to persist broadcast", code: "internal" };
+
+    // Explode the target list into per-target ledger rows so the sweep can
+    // track each dispatch independently. This is the source of truth for
+    // delivery state — `broadcasts.dispatchedCount`/`failedCount` are just
+    // denormalized aggregates refreshed at the end of every sweep pass.
+    await db
+        .insert(broadcastTargets)
+        .values(
+            parsed.data.targetChatIds.map((chatId) => ({
+                broadcastId: insertedId!,
+                chatId,
+                status: "pending" as const,
+                retryCount: 0,
+                createdAt: now,
+            })),
+        )
+        .run();
+
+    return { ok: true, broadcastId: insertedId, runAt };
 }
 
 /**
@@ -149,16 +242,16 @@ export async function dispatchBroadcastNow(broadcastId: number): Promise<Broadca
 
     const db = await getDbAsync();
     const bc = await db
-        .select()
+        .select({ id: broadcasts.id, status: broadcasts.status, botId: broadcasts.botId })
         .from(broadcasts)
         .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.botId, session.botId)))
         .get();
     if (!bc) return { ok: false, error: "Broadcast not found", code: "not_found" };
-    if (bc.status !== "scheduled") {
+    if (bc.status === "cancelled" || bc.status === "completed" || bc.status === "failed") {
         return { ok: false, error: `Broadcast is already ${bc.status}`, code: "invalid_state" };
     }
 
-    const result = await runBroadcast(db, bc);
+    const result = await runBroadcast(db, { id: bc.id });
     if (result.error === "already_claimed") {
         return { ok: false, error: "Broadcast is already being dispatched", code: "invalid_state" };
     }
@@ -166,6 +259,7 @@ export async function dispatchBroadcastNow(broadcastId: number): Promise<Broadca
         ok: true,
         dispatched: result.dispatched,
         failed: result.failed,
+        pending: result.pending,
         status: result.status,
     };
 }
@@ -179,9 +273,16 @@ export async function cancelBroadcast(broadcastId: number): Promise<BroadcastDis
     const session = await readSession();
     if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
     const db = await getDbAsync();
+    const now = Math.floor(Date.now() / 1000);
     const result = await db
         .update(broadcasts)
-        .set({ status: "cancelled", completedAt: Math.floor(Date.now() / 1000) })
+        .set({
+            status: "cancelled",
+            completedAt: now,
+            // Park nextAttemptAt in the future so a stale sweep never
+            // resurrects the cancelled row.
+            nextAttemptAt: now + 60 * 60 * 24 * 365,
+        })
         .where(
             and(
                 eq(broadcasts.id, broadcastId),
@@ -197,7 +298,7 @@ export async function cancelBroadcast(broadcastId: number): Promise<BroadcastDis
             code: "invalid_state",
         };
     }
-    return { ok: true, dispatched: 0, failed: 0, status: "cancelled" };
+    return { ok: true, dispatched: 0, failed: 0, pending: 0, status: "cancelled" };
 }
 
 export async function listBroadcasts(limit = 50): Promise<BroadcastListResult> {

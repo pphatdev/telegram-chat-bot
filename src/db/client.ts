@@ -5,6 +5,18 @@ import * as schema from "./schema";
 export type AppDatabase = DrizzleD1Database<typeof schema>;
 
 /**
+ * Wrap a raw D1 binding in the Drizzle client we use everywhere.
+ *
+ * Prefer this from code paths that already hold `env` (e.g. the `scheduled()`
+ * worker export for cron triggers, where `getCloudflareContext()` isn't
+ * available because we're not on a fetch request). Application request
+ * handlers should keep using `getDb()` / `getDbAsync()`.
+ */
+export function buildDb(dbBinding: D1Database): AppDatabase {
+  return drizzle(dbBinding, { schema, casing: "snake_case" });
+}
+
+/**
  * Returns a Drizzle-wrapped D1 client bound to `env.DB`.
  *
  * Prefer this over the raw binding — it gives typed queries against every
@@ -13,7 +25,7 @@ export type AppDatabase = DrizzleD1Database<typeof schema>;
  */
 export function getDb(): AppDatabase {
   const { env } = getCloudflareContext();
-  return drizzle(env.DB, { schema, casing: "snake_case" });
+  return buildDb(env.DB);
 }
 
 /**
@@ -22,7 +34,7 @@ export function getDb(): AppDatabase {
  */
 export async function getDbAsync(): Promise<AppDatabase> {
   const { env } = await getCloudflareContext({ async: true });
-  return drizzle(env.DB, { schema, casing: "snake_case" });
+  return buildDb(env.DB);
 }
 
 /**

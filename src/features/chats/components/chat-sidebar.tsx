@@ -3,6 +3,7 @@
 import { Search, Menu, Settings, Shield, Pin, PinOff, Archive, MessageCircle, BellOff, Trash2, Megaphone, History } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { toast } from "sonner";
 import type { ChatRow } from "@/db/schema";
 import {
@@ -12,8 +13,10 @@ import {
   toggleMuteChat,
   togglePinChat,
 } from "@/features/chats/actions";
+import { AvatarImage } from "@/features/chats/components/avatar-image";
 import { BroadcastComposer } from "@/features/broadcast/components/broadcast-composer";
 import { SettingsModal } from "@/features/settings/components/settings-modal";
+import type { ChatBackground } from "@/features/settings/lib/chat-background";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -29,12 +32,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 interface ChatSidebarProps {
   chats: ChatRow[];
   setChats: React.Dispatch<React.SetStateAction<ChatRow[]>>;
-  mobileView: 'sidebar' | 'chat';
-  setMobileView: (view: 'sidebar' | 'chat') => void;
-  activeChatId: number | null;
-  setActiveChatId: (id: number) => void;
   sidebarWidth: number;
   setSidebarWidth: (width: number) => void;
+  /** Global chat-background default. Owned by ChatFrame so per-chat overrides
+   *  in ChatProfile can resolve against it. Passed straight through to the
+   *  Settings › Appearance UI. */
+  globalBg: ChatBackground;
+  onGlobalBgChange: (bg: ChatBackground) => void;
 }
 
 type ChatFilter = 'All' | 'Private' | 'Group' | 'Channel';
@@ -43,13 +47,21 @@ const TABS: ChatFilter[] = ['All', 'Private', 'Group', 'Channel'];
 export function ChatSidebar({
   chats,
   setChats,
-  mobileView,
-  setMobileView,
-  activeChatId,
-  setActiveChatId,
   sidebarWidth,
   setSidebarWidth,
+  globalBg,
+  onGlobalBgChange,
 }: ChatSidebarProps) {
+  const pathname = usePathname();
+  // Highlight the row whose chat matches the current URL segment. `NaN` when
+  // no chat is open — the `=== chat.id` comparison then never matches, which
+  // is the desired "no active row" behavior.
+  const activeChatMatch = pathname?.match(/^\/chat\/(\d+)/);
+  const activeChatId = activeChatMatch ? Number.parseInt(activeChatMatch[1], 10) : NaN;
+  // On mobile the sidebar and chat pane are alternate views. `/` shows the
+  // sidebar; any `/chat/*` hides the sidebar in favor of the pane. lg+
+  // shows both simultaneously.
+  const isChatRoute = pathname?.startsWith("/chat/") ?? false;
   const [activeTab, setActiveTab] = useState<ChatFilter>('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -220,7 +232,7 @@ export function ChatSidebar({
 
   return (
     <aside
-      className={`relative shrink-0 w-full lg:w-(--sidebar-width) flex-col overflow-hidden lg:rounded-[32px] lg:border border-white/10 bg-background/40 backdrop-blur-3xl shadow-[0_30px_60px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.1)_inset,0_2px_12px_rgba(255,255,255,0.2)_inset] ${mobileView === 'sidebar' ? 'flex animate-in fade-in slide-in-from-left-8 lg:animate-none duration-300' : 'hidden lg:flex'}`}
+      className={`relative shrink-0 w-full lg:w-(--sidebar-width) flex-col overflow-hidden lg:rounded-[32px] lg:border border-white/10 bg-background/40 backdrop-blur-3xl shadow-[0_30px_60px_rgba(0,0,0,0.12),0_0_0_1px_rgba(255,255,255,0.1)_inset,0_2px_12px_rgba(255,255,255,0.2)_inset] ${!isChatRoute ? 'flex animate-in fade-in slide-in-from-left-8 lg:animate-none duration-300' : 'hidden lg:flex'}`}
       style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
     >
       <div
@@ -299,16 +311,21 @@ export function ChatSidebar({
             <ContextMenuTrigger
               render={
                 <div className="group relative">
-                  <button
-                    onClick={() => {
-                      setActiveChatId(chat.id);
-                      setMobileView('chat');
-                    }}
+                  <Link
+                    href={`/chat/${chat.id}`}
+                    prefetch
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-accent/60 ${activeChatId === chat.id ? 'bg-accent' : ''}`}
                   >
-                    <span className={`grid size-12 shrink-0 place-items-center rounded-full text-sm font-semibold text-white ${chat.avatarColor ?? 'bg-slate-500'}`}>
-                      {chat.avatarText ?? chat.title.slice(0, 2)}
-                    </span>
+                    <AvatarImage
+                      src={`/api/avatar/chat/${chat.id}`}
+                      alt={chat.title}
+                      className="size-12 shrink-0 rounded-full"
+                      fallback={
+                        <span className={`absolute inset-0 grid place-items-center text-sm font-semibold text-white ${chat.avatarColor ?? 'bg-slate-500'}`}>
+                          {chat.avatarText ?? chat.title.slice(0, 2)}
+                        </span>
+                      }
+                    />
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center justify-between gap-2">
                         <span className="flex min-w-0 items-center gap-1.5">
@@ -338,7 +355,7 @@ export function ChatSidebar({
                         )}
                       </span>
                     </span>
-                  </button>
+                  </Link>
                   <Tooltip>
                     <TooltipTrigger
                       onClick={(e) => { e.stopPropagation(); togglePin(chat.id); }}
@@ -403,6 +420,8 @@ export function ChatSidebar({
         handleFontChange={handleFontChange}
         scale={scale}
         handleScaleChange={handleScaleChange}
+        chatBg={globalBg}
+        handleChatBgChange={onGlobalBgChange}
       />
 
       <BroadcastComposer

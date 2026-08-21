@@ -2,7 +2,7 @@
 
 import { RefObject, useRef, useState } from "react";
 import { toast } from "sonner";
-import { X, Paperclip, Smile, Send, Loader2, Image as ImageIcon, File as FileIcon, MapPin, Contact, Star, PlaySquare, Search } from "lucide-react";
+import { X, Paperclip, Smile, Send, Loader2, Image as ImageIcon, File as FileIcon, MapPin, Contact, Star, PlaySquare, Search, Reply } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,15 +14,24 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { sendChatMessage } from "@/features/broadcast/actions";
 import type { MessageRow } from "@/db/schema";
+import type { ReplyTarget } from "@/features/chats/components/chat-message";
 
 interface ChatInputProps {
   activeChatId: number;
-  replyTo: { author: string; text: string } | null;
-  setReplyTo: (reply: { author: string; text: string } | null) => void;
+  replyTo: ReplyTarget | null;
+  setReplyTo: (reply: ReplyTarget | null) => void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
   activeEmojiTab: 'emoji' | 'sticker' | 'gif';
   setActiveEmojiTab: (tab: 'emoji' | 'sticker' | 'gif') => void;
+  /** Append a message row. Called BOTH for the optimistic append (with a
+   *  negative client-generated id and `status: 'sending'`) AND for the
+   *  post-upload success append on the file path. Chat-shell doesn't
+   *  differentiate — the row goes into state as-is. */
   onMessageSent?: (row: MessageRow) => void;
+  /** Patch an already-appended row identified by its (possibly negative)
+   *  client id. Used to (a) swap the negative id for the server-assigned
+   *  one and mark it `sent` on success, or (b) mark it `failed` on error. */
+  onMessageReconcile?: (clientId: number, patch: Partial<MessageRow>) => void;
 }
 
 const EMOJIS = [
@@ -180,12 +189,23 @@ export function ChatInput({
   activeEmojiTab,
   setActiveEmojiTab,
   onMessageSent,
+  onMessageReconcile,
 }: ChatInputProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [draft, setDraft] = useState("");
   const [attachKind, setAttachKind] = useState<"photo" | "document" | null>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
+  /**
+   * Synchronous double-submit guard. `isSending` is React state and lags
+   * one render behind — two Enter events in the same tick both see the
+   * stale `false` and fire two server calls. A ref is checked/written
+   * synchronously so the second press is a hard no-op.
+   *
+   * Applies to both text send and file upload paths; each grabs the lock
+   * on entry and releases in `finally`.
+   */
+  const sendInFlightRef = useRef(false);
 
   const canSend = draft.trim().length > 0 && !isSending;
 
@@ -203,6 +223,10 @@ export function ChatInput({
   const handleFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !attachKind) return;
+    // Sync guard — the file picker itself is a modal-ish flow so double-fire
+    // is less likely than for Enter, but the same lock applies uniformly.
+    if (sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
     setIsSending(true);
     const toastId = toast.loading(`Uploading ${file.name}...`);
     try {
@@ -219,10 +243,11 @@ export function ChatInput({
       }
 
       const caption = draft.trim() || undefined;
+      const replyToMessageId = replyTo?.telegramMessageId;
       const payload =
         attachKind === "photo"
-          ? { kind: "photo" as const, mediaR2Key: uploaded.r2Key, caption }
-          : { kind: "document" as const, mediaR2Key: uploaded.r2Key, caption };
+          ? { kind: "photo" as const, mediaR2Key: uploaded.r2Key, caption, replyToMessageId }
+          : { kind: "document" as const, mediaR2Key: uploaded.r2Key, caption, replyToMessageId };
 
       const send = await sendChatMessage(activeChatId, payload);
       if (!send.ok) {
@@ -242,7 +267,7 @@ export function ChatInput({
         authorName: null,
         authorTelegramId: null,
         text: caption ?? null,
-        replyToMessageId: null,
+        replyToMessageId: replyToMessageId ?? null,
         mediaR2Key: uploaded.r2Key,
         mediaMimeType: uploaded.mimeType,
         reactionsJson: null,
@@ -254,47 +279,189 @@ export function ChatInput({
     } finally {
       setIsSending(false);
       setAttachKind(null);
+      sendInFlightRef.current = false;
     }
   };
 
+  /**
+   * Send a text message. Best-practice send flow:
+   *
+   *   1. **Sync guard** via `sendInFlightRef` — blocks double-submit from a
+   *      fast Enter-Enter before React re-renders `isSending`.
+   *   2. **Snapshot** draft + reply target so later `setDraft("")` /
+   *      `setReplyTo(null)` don't affect the in-flight request.
+   *   3. **Clear the composer immediately** so the user can start typing
+   *      the next message while this one is in flight (Telegram / iMessage
+   *      style — the perceived latency is zero).
+   *   4. **Optimistic append** with a negative client id and
+   *      `status: 'sending'` so the bubble shows up instantly.
+   *   5. **Reconcile** on success — swap the negative id for the server
+   *      one and mark `sent`. **Rollback** on failure — mark the row
+   *      `failed` and restore the draft so the user can edit and retry.
+   *
+   * Multiple distinct sends are allowed concurrently (they don't collide —
+   * each has its own client id); only the *same* click/Enter is deduped.
+   */
   const handleSend = async () => {
+    if (sendInFlightRef.current) return;
     const text = draft.trim();
     if (!text) return;
+    sendInFlightRef.current = true;
+
+    const replyToMessageId = replyTo?.telegramMessageId ?? null;
+    const nowSec = Math.floor(Date.now() / 1000);
+    // Negative id guarantees no collision with server-assigned ids (all
+    // positive autoincrements in D1). Include a random suffix so two
+    // sends in the same second still get unique ids.
+    const clientId = -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
+
+    // 1. Clear composer immediately — snappy UX.
+    setDraft("");
+    setReplyTo(null);
+    inputRef.current?.focus();
     setIsSending(true);
-    const result = await sendChatMessage(activeChatId, {
+
+    // 2. Optimistic append with a "sending" status.
+    onMessageSent?.({
+      id: clientId,
+      botId: 0,
+      chatId: activeChatId,
+      telegramMessageId: null,
+      direction: "out",
       kind: "text",
+      authorName: null,
+      authorTelegramId: null,
       text,
-      replyToMessageId: undefined,
+      replyToMessageId,
+      mediaR2Key: null,
+      mediaMimeType: null,
+      reactionsJson: null,
+      status: "sending",
+      failureReason: null,
+      sentAt: nowSec,
+      createdAt: nowSec,
     });
-    setIsSending(false);
-    if (result.ok) {
-      setDraft("");
-      inputRef.current?.focus();
-      // Optimistic append via the parent — the server also persisted a row,
-      // so this stays in sync with the DB after a page refresh.
-      onMessageSent?.({
-        id: result.messageId,
-        botId: 0, // filled from server on next refresh
-        chatId: activeChatId,
-        telegramMessageId: result.telegramMessageId,
-        direction: "out",
+
+    try {
+      const result = await sendChatMessage(activeChatId, {
         kind: "text",
-        authorName: null,
-        authorTelegramId: null,
         text,
-        replyToMessageId: null,
-        mediaR2Key: null,
-        mediaMimeType: null,
-        reactionsJson: null,
-        status: "sent",
-        failureReason: null,
-        sentAt: Math.floor(Date.now() / 1000),
-        createdAt: Math.floor(Date.now() / 1000),
+        replyToMessageId: replyToMessageId ?? undefined,
       });
-    } else if (result.code === "rate_limited" && result.retryAfterMs) {
-      toast.error(`${result.error}. Retry in ${Math.ceil(result.retryAfterMs / 1000)}s.`);
-    } else {
-      toast.error(result.error);
+      if (result.ok) {
+        // 3a. Reconcile: replace negative id + null telegramMessageId with
+        //     the real server-assigned ones so replies / reactions can
+        //     target this message. If the server dropped the reply (parent
+        //     was deleted from Telegram), also clear the optimistic
+        //     `replyToMessageId` so the bubble stops rendering the reply chip.
+        onMessageReconcile?.(clientId, {
+          id: result.messageId,
+          telegramMessageId: result.telegramMessageId,
+          status: "sent",
+          ...(result.replyDropped && { replyToMessageId: null }),
+        });
+        if (result.replyDropped) {
+          toast("The original message was deleted — sent as a regular message.");
+        }
+      } else {
+        // 3b. Rollback: mark the optimistic row failed and put the text
+        //     back in the draft so the user can retry / edit.
+        onMessageReconcile?.(clientId, {
+          status: "failed",
+          failureReason: result.error,
+        });
+        setDraft((current) => current === "" ? text : current);
+        if (result.code === "rate_limited" && result.retryAfterMs) {
+          toast.error(`${result.error}. Retry in ${Math.ceil(result.retryAfterMs / 1000)}s.`);
+        } else {
+          toast.error(result.error);
+        }
+      }
+    } catch (err) {
+      // Network error — same rollback path as a structured failure.
+      const message = err instanceof Error ? err.message : "Send failed";
+      onMessageReconcile?.(clientId, { status: "failed", failureReason: message });
+      setDraft((current) => current === "" ? text : current);
+      toast.error(message);
+    } finally {
+      setIsSending(false);
+      sendInFlightRef.current = false;
+    }
+  };
+
+  /**
+   * Send one of the composer's built-in stickers. Same sync-guard +
+   * optimistic-append-with-reconcile flow as `handleSend`.
+   *
+   * `stickerRef` on the wire must be a URL Telegram can fetch — so we
+   * resolve the picker's `sticker.src` (a leading-slash path like
+   * `/stickers/pphat/0.webm`) against `window.location.origin`. Locally
+   * we use the same absolute URL for the optimistic preview so the video
+   * starts playing immediately without waiting for the server round-trip.
+   */
+  const handleSendSticker = async (src: string) => {
+    if (sendInFlightRef.current) return;
+    if (!src) return;
+    sendInFlightRef.current = true;
+
+    const absoluteUrl = new URL(src, window.location.origin).toString();
+    const mime = src.toLowerCase().endsWith(".webm") ? "video/webm" : "image/webp";
+    const nowSec = Math.floor(Date.now() / 1000);
+    const clientId = -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
+    const replyToMessageId = replyTo?.telegramMessageId ?? null;
+
+    setReplyTo(null);
+    setIsSending(true);
+
+    onMessageSent?.({
+      id: clientId,
+      botId: 0,
+      chatId: activeChatId,
+      telegramMessageId: null,
+      direction: "out",
+      kind: "sticker",
+      authorName: null,
+      authorTelegramId: null,
+      text: null,
+      replyToMessageId,
+      mediaR2Key: absoluteUrl,
+      mediaMimeType: mime,
+      reactionsJson: null,
+      status: "sending",
+      failureReason: null,
+      sentAt: nowSec,
+      createdAt: nowSec,
+    });
+
+    try {
+      const result = await sendChatMessage(activeChatId, {
+        kind: "sticker",
+        stickerRef: absoluteUrl,
+      });
+      if (result.ok) {
+        onMessageReconcile?.(clientId, {
+          id: result.messageId,
+          telegramMessageId: result.telegramMessageId,
+          status: "sent",
+        });
+      } else {
+        onMessageReconcile?.(clientId, {
+          status: "failed",
+          failureReason: result.error,
+        });
+        if (result.code === "rate_limited" && result.retryAfterMs) {
+          toast.error(`${result.error}. Retry in ${Math.ceil(result.retryAfterMs / 1000)}s.`);
+        } else {
+          toast.error(result.error);
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Send failed";
+      onMessageReconcile?.(clientId, { status: "failed", failureReason: message });
+      toast.error(message);
+    } finally {
+      setIsSending(false);
+      sendInFlightRef.current = false;
     }
   };
 
@@ -311,11 +478,17 @@ export function ChatInput({
   return (
     <div className="relative mx-auto w-full max-w-4xl px-3 pb-4 sm:px-8">
       {replyTo && (
-        <div className="absolute inset-x-3 bottom-[calc(100%-16px)] sm:inset-x-8 z-0 flex items-center gap-2 rounded-t-4xl bg-card/80 px-3 pb-5 pt-2 shadow-sm backdrop-blur-xl border-t border-x border-border animate-in fade-in slide-in-from-bottom-6 duration-200 ease-out">
-          <div className="w-1 rounded-full bg-primary self-stretch my-0.5"></div>
-          <div className="flex-1 min-w-0 pl-3 pr-2 py-0.5">
-            <div className="font-semibold text-primary text-[13px] leading-tight">{replyTo.author}</div>
-            <div className="text-muted-foreground truncate text-xs leading-tight mt-0.5">{replyTo.text}</div>
+        <div className="absolute inset-x-3 bottom-[calc(100%-16px)] sm:inset-x-8 z-0 flex items-center gap-2 rounded-t-4xl bg-card/80 px-3 pb-5 pt-2.5 shadow-sm backdrop-blur-xl border-t border-x border-border animate-in fade-in slide-in-from-bottom-6 duration-200 ease-out">
+          <div className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+            <Reply className="w-3.5 h-3.5" />
+          </div>
+          <div className="w-1 rounded-full bg-primary self-stretch my-0.5" />
+          <div className="flex-1 min-w-0 pl-1 pr-2 py-0.5 leading-tight">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground/70">Replying to</span>
+              <span className="text-[13px] font-semibold text-primary truncate">{replyTo.author}</span>
+            </div>
+            <div className="text-muted-foreground truncate text-xs mt-0.5">{replyTo.text}</div>
           </div>
           <button type="button" aria-label="Cancel reply" onClick={() => setReplyTo(null)} className="relative z-50 rounded-full p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
             <X className="w-4 h-4" />
@@ -424,7 +597,14 @@ export function ChatInput({
                   </TabsContent>
                   <TabsContent value="sticker" className="grid grid-cols-4 gap-3">
                     {filteredStickers.map((sticker, i) => (
-                      <button key={i} title={sticker.name} className="aspect-square bg-accent/30 rounded-xl hover:bg-accent transition-colors flex items-center justify-center text-4xl overflow-hidden p-1 relative">
+                      <button
+                        key={i}
+                        type="button"
+                        title={sticker.name}
+                        onClick={() => sticker.src && handleSendSticker(sticker.src)}
+                        disabled={!sticker.src || isSending}
+                        className="aspect-square bg-accent/30 rounded-xl hover:bg-accent transition-colors flex items-center justify-center text-4xl overflow-hidden p-1 relative disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+                      >
                         {sticker.src ? (
                           sticker.src.endsWith('.webm') ? (
                             <video src={sticker.src} autoPlay loop muted playsInline className="w-full h-full object-contain pointer-events-none" />

@@ -5,26 +5,35 @@ import { cn } from "@/lib/utils";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
+// Only Inter is the active font on first paint (see `font-sans` on <html>).
+// The others expose CSS variables the Settings modal can swap in on-demand,
+// so preloading them all triggers "resource was preloaded but not used"
+// browser warnings for every font the user never picks. Keep preload on the
+// default only; the alternates load lazily when their variable is applied.
+const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 const geistSans = Geist({
     variable: "--font-geist-sans",
     subsets: ["latin"],
+    preload: false,
 });
 
 const geistMono = Geist_Mono({
     variable: "--font-geist-mono",
     subsets: ["latin"],
+    preload: false,
 });
 
 const kantumruyPro = Kantumruy_Pro({
     variable: "--font-kantumruy-pro",
     subsets: ["khmer", "latin"],
+    preload: false,
 });
 
 const openSans = Open_Sans({
     variable: "--font-open-sans",
     subsets: ["latin"],
+    preload: false,
 });
 
 export const metadata: Metadata = {

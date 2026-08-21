@@ -2,27 +2,75 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { X, AtSign, Hash, Info, Bell, Image, FileText, Mic, Trash2, Ban } from "lucide-react";
+import { X, AtSign, Hash, Info, Bell, Image, FileText, Mic, Trash2, Ban, Check, Palette } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import type { ChatRow } from "@/db/schema";
 import { archiveChat, deleteChat, toggleMuteChat } from "@/features/chats/actions";
+import { AvatarImage } from "@/features/chats/components/avatar-image";
 import { loadChatMessageCounts } from "@/features/settings/actions";
 import type { ChatMessageCounts } from "@/features/settings/queries";
+import {
+  CHAT_BG_COLORS,
+  CHAT_BG_IMAGES,
+  isSafeChatBgUrl,
+  type ChatBackground,
+} from "@/features/settings/lib/chat-background";
 
 interface ChatProfileProps {
   chat: ChatRow;
   onClose: () => void;
   /** Optional callback so the shell can drop the chat from state after delete. */
   onChatDeleted?: (chatId: number) => void;
+  /** This chat's per-conversation background override, or `null` if it
+   *  inherits the global default. */
+  chatBgOverride: ChatBackground | null;
+  /** Global default background, shown as the "inherit" state and previewed
+   *  as the fallback tile. */
+  globalBg: ChatBackground;
+  /** Save (or clear, with `null`) a per-conversation override. ChatShell
+   *  persists to `localStorage` and immediately repaints. */
+  onChatBgChange: (bg: ChatBackground | null) => void;
 }
 
-export function ChatProfile({ chat, onClose, onChatDeleted }: ChatProfileProps) {
+export function ChatProfile({
+  chat,
+  onClose,
+  onChatDeleted,
+  chatBgOverride,
+  globalBg,
+  onChatBgChange,
+}: ChatProfileProps) {
   const [muted, setMuted] = useState(chat.muted);
   const [counts, setCounts] = useState<ChatMessageCounts | null>(null);
+  const [customBgUrl, setCustomBgUrl] = useState(
+    chatBgOverride?.kind === "url" ? chatBgOverride.url : "",
+  );
+  const usingDefault = chatBgOverride === null;
+  const customBgUrlValid = customBgUrl.trim() === "" || isSafeChatBgUrl(customBgUrl);
 
   useEffect(() => {
     setMuted(chat.muted);
   }, [chat.muted]);
+
+  // Re-seed the URL field when the active chat changes (the panel is
+  // reused across chats — ChatShell doesn't unmount it — so React state
+  // does not reset on its own).
+  useEffect(() => {
+    setCustomBgUrl(chatBgOverride?.kind === "url" ? chatBgOverride.url : "");
+  }, [chat.id, chatBgOverride]);
+
+  const applyCustomBgUrl = () => {
+    const value = customBgUrl.trim();
+    if (!value) {
+      onChatBgChange(null);
+      return;
+    }
+    if (!isSafeChatBgUrl(value)) {
+      toast.error("Please enter a valid http(s) image URL");
+      return;
+    }
+    onChatBgChange({ kind: "url", url: value });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +176,126 @@ export function ChatProfile({ chat, onClose, onChatDeleted }: ChatProfileProps) 
           <SharedMediaRow icon={<Image className="w-5 h-5" />} color="text-blue-500" bg="bg-blue-500/10" label="Photos and Videos" count={counts?.photosAndVideos} />
           <SharedMediaRow icon={<FileText className="w-5 h-5" />} color="text-emerald-500" bg="bg-emerald-500/10" label="Files" count={counts?.files} />
           <SharedMediaRow icon={<Mic className="w-5 h-5" />} color="text-purple-500" bg="bg-purple-500/10" label="Voice / Audio" count={counts?.audio} />
+        </div>
+
+        {/* Chat Background — per-conversation override. `null` = inherit the
+            global default (managed in Settings › Appearance). */}
+        <div className="p-4 border-b border-white/5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Palette className="w-4 h-4 text-primary" />
+              <div className="text-[13px] font-semibold text-primary">Background</div>
+            </div>
+            {!usingDefault && (
+              <button
+                type="button"
+                onClick={() => { onChatBgChange(null); setCustomBgUrl(""); }}
+                className="text-[12px] text-primary hover:opacity-80 font-medium transition-opacity"
+              >
+                Use default
+              </button>
+            )}
+          </div>
+
+          <div className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-2">Color</div>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              type="button"
+              aria-label="Use global default"
+              aria-pressed={usingDefault}
+              onClick={() => { onChatBgChange(null); setCustomBgUrl(""); }}
+              className={`relative size-9 rounded-full border-2 border-dashed transition-all ${usingDefault ? 'border-primary ring-2 ring-primary/40 scale-105' : 'border-muted-foreground/40 hover:scale-105'}`}
+              title="Inherit global default"
+            >
+              {usingDefault && (
+                <span className="absolute inset-0 grid place-items-center">
+                  <Check className="w-4 h-4 text-primary" />
+                </span>
+              )}
+            </button>
+            {CHAT_BG_COLORS.map((preset) => {
+              const active = chatBgOverride?.kind === "color" && chatBgOverride.id === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-label={preset.label}
+                  aria-pressed={active}
+                  onClick={() => onChatBgChange({ kind: "color", id: preset.id })}
+                  className={`relative size-9 rounded-full border transition-all shadow-sm ${active ? 'border-primary ring-2 ring-primary/40 scale-105' : 'border-white/20 hover:scale-105'}`}
+                  style={{
+                    background: preset.css === "transparent"
+                      ? "repeating-conic-gradient(oklch(0.85 0 0) 0 25%, oklch(0.75 0 0) 0 50%) 50% / 10px 10px"
+                      : preset.css,
+                  }}
+                >
+                  {active && (
+                    <span className="absolute inset-0 grid place-items-center">
+                      <Check className="w-4 h-4 text-primary drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-2">Preset image</div>
+          <div className="grid grid-cols-5 gap-2 mb-4">
+            {CHAT_BG_IMAGES.map((preset) => {
+              const active = chatBgOverride?.kind === "image" && chatBgOverride.id === preset.id;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-label={preset.label}
+                  aria-pressed={active}
+                  onClick={() => onChatBgChange({ kind: "image", id: preset.id })}
+                  className={`relative h-14 rounded-lg border transition-all shadow-sm overflow-hidden ${active ? 'border-primary ring-2 ring-primary/40' : 'border-white/20 hover:scale-[1.02]'}`}
+                  style={{
+                    backgroundImage: preset.css,
+                    backgroundSize: preset.size ?? "cover",
+                    backgroundRepeat: preset.repeat ?? "no-repeat",
+                    backgroundPosition: "center",
+                  }}
+                >
+                  {active && (
+                    <span className="absolute inset-0 grid place-items-center bg-black/20">
+                      <Check className="w-4 h-4 text-white drop-shadow" />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="text-[11px] uppercase tracking-wider font-semibold text-muted-foreground mb-2">Custom image URL</div>
+          <div className="flex gap-2">
+            <input
+              type="url"
+              inputMode="url"
+              placeholder="https://example.com/background.jpg"
+              value={customBgUrl}
+              onChange={(e) => setCustomBgUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && customBgUrlValid) applyCustomBgUrl(); }}
+              className={`flex-1 min-w-0 bg-black/5 dark:bg-white/5 border rounded-lg px-3 py-1.5 text-[13px] text-foreground outline-none placeholder:text-muted-foreground/50 transition-colors ${customBgUrl && !customBgUrlValid ? 'border-destructive/60 focus:border-destructive' : 'border-white/10 focus:border-primary/60'}`}
+            />
+            <button
+              type="button"
+              onClick={applyCustomBgUrl}
+              disabled={customBgUrl.trim() !== "" && !customBgUrlValid}
+              className="bg-primary text-primary-foreground px-3 rounded-lg font-medium text-[13px] hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              Apply
+            </button>
+          </div>
+          {customBgUrl && !customBgUrlValid && (
+            <p className="text-[12px] text-destructive mt-1.5">Only http(s) URLs are allowed.</p>
+          )}
+          {usingDefault && (
+            <p className="text-[12px] text-muted-foreground mt-3 leading-relaxed">
+              Inheriting global default (Settings › Appearance › Chat Background).
+            </p>
+          )}
         </div>
 
         {/* Actions */}

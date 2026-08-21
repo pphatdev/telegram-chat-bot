@@ -23,6 +23,25 @@ export async function getChatsForBot(botId: number): Promise<ChatRow[]> {
 }
 
 /**
+ * Ownership-guarded single-chat fetch used by the per-chat RSC page
+ * (`/chat/[chatId]`). Returns `undefined` when the chat doesn't exist OR
+ * doesn't belong to the caller's bot — the page treats both as `notFound()`
+ * so we never leak the existence of a chat owned by another bot.
+ */
+export async function getChatById(
+  botId: number,
+  chatId: number,
+): Promise<ChatRow | undefined> {
+  const db = await getDbAsync();
+  const row = await db
+    .select()
+    .from(chats)
+    .where(and(eq(chats.botId, botId), eq(chats.id, chatId)))
+    .get();
+  return row;
+}
+
+/**
  * Fetch a page of messages for a chat, newest-first, with a cursor for
  * infinite scroll (`cursor` = the oldest sentAt from the previous page).
  *

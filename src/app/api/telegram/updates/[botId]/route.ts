@@ -2,7 +2,7 @@ import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDbAsync } from "@/db/client";
-import { bots } from "@/db/schema";
+import { bots, users } from "@/db/schema";
 import { readSession } from "@/lib/auth/session";
 import { decrypt } from "@/lib/crypto";
 import { persistTelegramUpdate } from "@/features/chats/persistence";
@@ -28,6 +28,10 @@ import { telegramUpdateSchema } from "@/lib/telegram/schemas";
  *   4. Persist each update via persistTelegramUpdate — that helper also
  *      bumps `bots.lastUpdateId` atomically so re-entrant polls don't
  *      double-process.
+ *
+ * Debug: when the session's user has `debug_enabled=true`, every call() on
+ * the client + every returned update is logged via the client's built-in
+ * debug hook (see src/lib/telegram/client.ts).
  */
 export async function POST(
     _request: Request,
@@ -45,18 +49,25 @@ export async function POST(
     }
 
     const db = await getDbAsync();
-    const bot = await db
-        .select()
+    const row = await db
+        .select({ bot: bots, debugEnabled: users.debugEnabled })
         .from(bots)
+        .innerJoin(users, eq(users.id, bots.userId))
         .where(and(eq(bots.id, botId), eq(bots.userId, session.userId)))
         .get();
-    if (!bot) {
+    if (!row) {
         return NextResponse.json({ ok: false, error: "unknown_bot" }, { status: 404 });
     }
+    const bot = row.bot;
+    const debug = row.debugEnabled;
 
     const { env } = await getCloudflareContext({ async: true });
     const token = await decrypt(bot.encryptedToken, env.ENCRYPTION_SECRET);
-    const client = new TelegramClient({ token });
+    const client = new TelegramClient({
+        token,
+        debug,
+        debugLabel: `bot:${bot.id}${bot.username ? `:@${bot.username}` : ""}`,
+    });
 
     let raw;
     try {

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { timingSafeEqual, verifyWebhookSecret, WEBHOOK_SECRET_HEADER } from "./webhook";
+import {
+    deriveWebhookSecret,
+    timingSafeEqual,
+    verifyWebhookSecret,
+    WEBHOOK_SECRET_HEADER,
+} from "./webhook";
 
 describe("timingSafeEqual", () => {
     it("returns true for equal strings", () => {
@@ -48,5 +53,44 @@ describe("verifyWebhookSecret", () => {
     it("is case-insensitive on the header name (per HTTP spec)", () => {
         const h = new Headers({ "X-Telegram-Bot-Api-Secret-Token": SECRET });
         expect(verifyWebhookSecret(h, SECRET)).toBe(true);
+    });
+});
+
+describe("deriveWebhookSecret", () => {
+    const HASH = "pbkdf2$100000$c2FsdHNhbHRzYWx0c2FsdA==$aGFzaGhhc2hoYXNoaGFzaA==";
+
+    it("is deterministic for the same inputs", async () => {
+        const a = await deriveWebhookSecret(HASH, 42);
+        const b = await deriveWebhookSecret(HASH, 42);
+        expect(a).toBe(b);
+    });
+
+    it("changes when the botId changes", async () => {
+        const a = await deriveWebhookSecret(HASH, 1);
+        const b = await deriveWebhookSecret(HASH, 2);
+        expect(a).not.toBe(b);
+    });
+
+    it("changes when the passwordHash changes", async () => {
+        const a = await deriveWebhookSecret(HASH, 1);
+        const b = await deriveWebhookSecret(HASH + "x", 1);
+        expect(a).not.toBe(b);
+    });
+
+    it("produces only Telegram-safe characters (A-Z a-z 0-9 _ -)", async () => {
+        const secret = await deriveWebhookSecret(HASH, 12345);
+        expect(secret).toMatch(/^[A-Za-z0-9_-]+$/);
+        // 32-byte HMAC-SHA256 → 43 chars base64url (no padding).
+        expect(secret.length).toBe(43);
+    });
+
+    it("rejects empty passwordHash", async () => {
+        await expect(deriveWebhookSecret("", 1)).rejects.toThrow(/passwordHash/);
+    });
+
+    it("rejects non-positive botId", async () => {
+        await expect(deriveWebhookSecret(HASH, 0)).rejects.toThrow(/botId/);
+        await expect(deriveWebhookSecret(HASH, -1)).rejects.toThrow(/botId/);
+        await expect(deriveWebhookSecret(HASH, Number.NaN)).rejects.toThrow(/botId/);
     });
 });

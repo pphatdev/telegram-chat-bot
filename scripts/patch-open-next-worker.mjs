@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Patches OpenNext's generated worker for realtime support.
+ * Patches OpenNext's generated worker for realtime + cron support.
  *
  * WHAT & WHY
  *   OpenNext (v1.20) compiles the Next.js app to `.open-next/worker.js` and:
@@ -10,16 +10,20 @@
  *     - reconstructs Responses on the way out of the route pipeline,
  *       dropping the Cloudflare-specific `webSocket` property. That means
  *       returning a WS-upgrade Response from a Next.js route silently
- *       breaks the handshake.
+ *       breaks the handshake;
+ *     - emits only a `fetch` handler on the default export. Cloudflare
+ *       Cron Triggers invoke `scheduled(event, env, ctx)` instead, which
+ *       Next.js has no idiomatic hook for — we have to append it here.
  *
- *   This script fixes both:
+ *   This script fixes all three:
  *     1. Compile the ChatFeedHub DO to a sibling bundle and append
  *        `export { ChatFeedHub } from ...` to worker.js.
  *     2. Compile the chat-feed router to a sibling bundle, then wrap
  *        worker.js's `export default {...}` — the wrapper intercepts
  *        WebSocket upgrades to `/api/chat-feed` at the worker's entry point
  *        (before Next.js sees them) and delegates everything else back to
- *        OpenNext's original handler.
+ *        OpenNext's original handler. The same wrapper adds a `scheduled`
+ *        handler that runs the broadcast sweep on every cron tick.
  *
  *   Idempotent — safe to run multiple times.
  */
@@ -42,6 +46,13 @@ const ROUTER = {
     outFile: ".open-next/durable-objects/chat-feed-router.js",
     importSpecifier: "./durable-objects/chat-feed-router.js",
     exportName: "routeChatFeed",
+};
+
+const CRON = {
+    source: "src/lib/cron/scheduled-broadcasts.ts",
+    outFile: ".open-next/cron/scheduled-broadcasts.js",
+    importSpecifier: "./cron/scheduled-broadcasts.js",
+    exportName: "runScheduledBroadcasts",
 };
 
 const WRAPPER_MARKER = "// __opennextjs_chat_feed_wrapped__";
@@ -77,9 +88,11 @@ for (const { exportName, source, outFile } of DURABLE_OBJECTS) {
     console.log(`[patch-open-next-worker] Appended export for ${exportName}.`);
 }
 
-// --- 2. Compile router + wrap default export ------------------------------
+// --- 2. Compile router + cron bundle --------------------------------------
 await compileBundle(ROUTER.source, ROUTER.outFile);
+await compileBundle(CRON.source, CRON.outFile);
 
+// --- 3. Wrap default export with WS interceptor + cron scheduled handler ---
 if (workerSrc.includes(WRAPPER_MARKER)) {
     console.log("[patch-open-next-worker] Default export already wrapped. Skipping.");
 } else {
@@ -98,6 +111,7 @@ if (workerSrc.includes(WRAPPER_MARKER)) {
 
     workerSrc += `\n${WRAPPER_MARKER}
 import { ${ROUTER.exportName} as __routeChatFeed } from "${ROUTER.importSpecifier}";
+import { ${CRON.exportName} as __runScheduledBroadcasts } from "${CRON.importSpecifier}";
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -109,9 +123,19 @@ export default {
         }
         return __opennextDefault.fetch(request, env, ctx);
     },
+    async scheduled(event, env, ctx) {
+        // waitUntil keeps the worker alive across the async sweep even after
+        // scheduled() returns — Cloudflare terminates the isolate as soon as
+        // the handler resolves otherwise.
+        ctx.waitUntil(
+            __runScheduledBroadcasts(env).catch((err) => {
+                console.error("[cron] scheduled-broadcasts sweep failed:", err);
+            }),
+        );
+    },
 };
 `;
-    console.log("[patch-open-next-worker] Wrapped default export with WS interceptor.");
+    console.log("[patch-open-next-worker] Wrapped default export with WS + cron handlers.");
 }
 
 writeFileSync(WORKER_PATH, workerSrc, "utf8");

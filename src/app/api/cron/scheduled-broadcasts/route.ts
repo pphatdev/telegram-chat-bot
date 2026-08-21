@@ -1,26 +1,25 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { and, eq, lte } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDbAsync } from "@/db/client";
-import { broadcasts } from "@/db/schema";
-import { runBroadcast } from "@/features/broadcast/sweep";
+import { runBroadcast, selectDueBroadcasts } from "@/features/broadcast/sweep";
 import { timingSafeEqual } from "@/lib/telegram/webhook";
 
 /**
  * POST /api/cron/scheduled-broadcasts
  *
- * Sweep due scheduled broadcasts. See `src/features/broadcast/sweep.ts` for
- * the per-row dispatch semantics.
+ * Admin-triggered sweep of due scheduled broadcasts. Useful for:
+ *   - Local dev where the Cloudflare Cron Trigger isn't wired up
+ *     (miniflare doesn't run schedules for `next dev`).
+ *   - Kicking the queue immediately after fixing a broken broadcast
+ *     without waiting for the next tick.
  *
- * Auth: X-Cron-Secret must match env.WEBHOOK_SECRET (reused; split into a
- * dedicated CRON_SECRET later if needed).
+ * The production sweep runs from the `scheduled()` export appended to the
+ * OpenNext worker by `scripts/patch-open-next-worker.mjs` — that path
+ * doesn't come through here, so this endpoint is purely a manual override.
  *
- * Bounded to MAX_ROWS_PER_TICK so long queues drain across multiple ticks
- * rather than exhausting a single Worker invocation.
- *
- * Wiring to Cloudflare Cron Triggers requires an extended OpenNext worker
- * entrypoint that exports `scheduled()` — for now this endpoint is triggered
- * either by an external scheduler or by hand for testing.
+ * Auth: `X-Cron-Secret` must match `env.CRON_SECRET`. Bounded to
+ * `MAX_ROWS_PER_TICK` so a stuck queue can't exhaust a single Worker
+ * invocation on manual retry.
  */
 const MAX_ROWS_PER_TICK = 5;
 const CRON_SECRET_HEADER = "x-cron-secret";
@@ -28,18 +27,12 @@ const CRON_SECRET_HEADER = "x-cron-secret";
 export async function POST(request: Request) {
     const { env } = await getCloudflareContext({ async: true });
     const provided = request.headers.get(CRON_SECRET_HEADER) ?? "";
-    if (!env.WEBHOOK_SECRET || !timingSafeEqual(provided, env.WEBHOOK_SECRET)) {
+    if (!env.CRON_SECRET || !timingSafeEqual(provided, env.CRON_SECRET)) {
         return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
     const db = await getDbAsync();
-    const now = Math.floor(Date.now() / 1000);
-    const due = await db
-        .select()
-        .from(broadcasts)
-        .where(and(eq(broadcasts.status, "scheduled"), lte(broadcasts.runAt, now)))
-        .limit(MAX_ROWS_PER_TICK)
-        .all();
+    const due = await selectDueBroadcasts(db, MAX_ROWS_PER_TICK);
 
     const results = [];
     for (const bc of due) {

@@ -10,6 +10,7 @@
     "preview": "opennextjs-cloudflare build && npm run patch:worker && opennextjs-cloudflare preview",
     "deploy": "opennextjs-cloudflare build && npm run patch:worker && opennextjs-cloudflare deploy",
     "upload": "opennextjs-cloudflare build && npm run patch:worker && opennextjs-cloudflare upload",
+    "cf:build": "opennextjs-cloudflare build && npm run patch:worker",
     "patch:worker": "node scripts/patch-open-next-worker.mjs",
     "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
     "db:generate": "drizzle-kit generate",

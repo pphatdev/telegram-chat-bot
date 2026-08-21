@@ -82,9 +82,17 @@
 			"new_sqlite_classes": ["ChatFeedHub"]
 		}
 	],
+	// Cron trigger — sweep due scheduled broadcasts once per minute. Handled
+	// by the scheduled() export appended to `.open-next/worker.js` by
+	// `scripts/patch-open-next-worker.mjs`.
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
 	// Non-secret runtime vars. Actual secret material
-	// (TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, ENCRYPTION_KEY) is provisioned via
+	// (ENCRYPTION_SECRET, CRON_SECRET) is provisioned via
 	// `wrangler secret put` and referenced through `env` at runtime.
+	// The per-bot Telegram webhook secret is derived at runtime from
+	// `ENCRYPTION_SECRET + botId` — see `src/lib/telegram/webhook.ts`.
 	"vars": {
 		"NEXT_PUBLIC_APP_NAME": "Telegram Bot UI"
 	}

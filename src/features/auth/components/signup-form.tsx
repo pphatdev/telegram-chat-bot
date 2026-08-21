@@ -47,6 +47,7 @@ export function SignupForm({
         setIsLoading(true);
         const result = await signup(values);
         if (result.ok) {
+            if (result.warning) toast.warning(result.warning);
             window.location.href = "/";
             return;
         }

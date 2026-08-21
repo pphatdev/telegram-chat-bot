@@ -46,6 +46,7 @@ export function LoginForm() {
         setIsLoading(true);
         const result = await loginWithApiKey(values);
         if (result.ok) {
+            if (result.warning) toast.warning(result.warning);
             window.location.href = "/";
             return;
         }

@@ -6,7 +6,12 @@ import { getDbAsync } from "@/db/client";
 import { bots, users } from "@/db/schema";
 import { encrypt, hashPassword, verifyPassword } from "@/lib/crypto";
 import { issueSession, clearSession } from "@/lib/auth/session";
-import { TelegramApiError, TelegramClient } from "@/lib/telegram";
+import {
+    TelegramApiError,
+    TelegramClient,
+    deriveWebhookSecret,
+    registerBotWebhook,
+} from "@/lib/telegram";
 import {
     loginApiKeySchema,
     loginCredentialsSchema,
@@ -16,7 +21,9 @@ import {
     type SignupInput,
 } from "@/features/auth/schemas";
 
-export type AuthResult = { ok: true } | { ok: false; error: string; field?: string };
+export type AuthResult =
+    | { ok: true; warning?: string }
+    | { ok: false; error: string; field?: string };
 
 /**
  * Turn a raw Telegram getMe() failure into a message a human can act on.
@@ -28,6 +35,39 @@ function describeTelegramError(err: unknown): string {
     if (err.errorCode === 401) return "Invalid or revoked bot token. Reissue it via @BotFather (/revoke → /token).";
     if (err.errorCode === 404) return "Telegram rejected this token as unknown. Double-check for typos.";
     return `Telegram: ${err.description}`;
+}
+
+/**
+ * Register the bot's webhook with Telegram so `/start` and every subsequent
+ * update lands at `/api/telegram/webhook/[botId]`. The `secret_token` we
+ * hand Telegram is derived from the owning user's `passwordHash` + `botId`
+ * via {@link deriveWebhookSecret}, so it stays in sync with the value the
+ * webhook receiver will independently recompute at request time — no
+ * additional column on `bots` and no global env secret shared across tenants.
+ *
+ * Failure here does NOT block auth — the session still issues so the user
+ * can reach the dashboard. Instead, we return a warning string the UI can
+ * surface as a toast, and log the underlying error server-side.
+ */
+async function safeRegisterWebhook(
+    client: TelegramClient,
+    opts: { publicAppUrl: string; botId: number; passwordHash: string },
+): Promise<string | undefined> {
+    try {
+        const secretToken = await deriveWebhookSecret(opts.passwordHash, opts.botId);
+        await registerBotWebhook(client, {
+            publicAppUrl: opts.publicAppUrl,
+            botId: opts.botId,
+            secretToken,
+        });
+        return undefined;
+    } catch (err) {
+        console.error("[auth] Failed to register Telegram webhook:", err);
+        if (err instanceof TelegramApiError) {
+            return `Signed in, but Telegram rejected the webhook (${err.errorCode}: ${err.description}). Start messages may not appear until PUBLIC_APP_URL is fixed.`;
+        }
+        return "Signed in, but Telegram webhook registration failed. Start messages may not appear until you re-authenticate.";
+    }
 }
 
 /**
@@ -49,11 +89,15 @@ export async function loginWithApiKey(input: LoginApiKeyInput): Promise<AuthResu
     }
 
     const { env } = await getCloudflareContext({ async: true });
-    const client = new TelegramClient({ token: parsed.data.token });
+    // Initial getMe is un-authenticated w.r.t. our own user model — we don't
+    // know who owns the token yet, so debug logging can't be gated. Do the
+    // shape-validating call, then re-instantiate the client with debug=true
+    // if the owner turns out to have opted in.
+    const bootstrapClient = new TelegramClient({ token: parsed.data.token });
 
     let me;
     try {
-        me = await client.getMe();
+        me = await bootstrapClient.getMe();
     } catch (err) {
         return { ok: false, error: describeTelegramError(err), field: "token" };
     }
@@ -70,6 +114,8 @@ export async function loginWithApiKey(input: LoginApiKeyInput): Promise<AuthResu
 
     let userId: number;
     let botId: number;
+    let passwordHash: string;
+    let debugEnabled = false;
 
     if (existingBot) {
         userId = existingBot.userId;
@@ -79,6 +125,23 @@ export async function loginWithApiKey(input: LoginApiKeyInput): Promise<AuthResu
             .set({ encryptedToken, name: me.first_name, username: me.username ?? "", updatedAt: now })
             .where(eq(bots.id, existingBot.id))
             .run();
+        const owner = await db
+            .select({ passwordHash: users.passwordHash, debugEnabled: users.debugEnabled })
+            .from(users)
+            .where(eq(users.id, existingBot.userId))
+            .get();
+        if (!owner) return { ok: false, error: "Owning user not found" };
+        passwordHash = owner.passwordHash;
+        debugEnabled = owner.debugEnabled;
+
+        if (debugEnabled) {
+            // Post-hoc log so the operator can see the getMe response for
+            // future re-logins on their existing bot.
+            console.log(
+                `[tg:debug] bot:${botId}${me.username ? `:@${me.username}` : ""} ← getMe (relogin)`,
+                JSON.stringify(me),
+            );
+        }
     } else {
         // Auto-provision an owning user for API-key-only logins. Password hash is
         // a random unusable string — the user must "sign up" to set a password.
@@ -94,19 +157,21 @@ export async function loginWithApiKey(input: LoginApiKeyInput): Promise<AuthResu
                 updatedAt: now,
             })
             .onConflictDoNothing()
-            .returning({ id: users.id })
+            .returning({ id: users.id, passwordHash: users.passwordHash })
             .get();
 
         if (insertedUser) {
             userId = insertedUser.id;
+            passwordHash = insertedUser.passwordHash;
         } else {
             const found = await db
-                .select({ id: users.id })
+                .select({ id: users.id, passwordHash: users.passwordHash })
                 .from(users)
                 .where(eq(users.username, me.username ?? `bot_${me.id}`))
                 .get();
             if (!found) return { ok: false, error: "Failed to provision user" };
             userId = found.id;
+            passwordHash = found.passwordHash;
         }
 
         const insertedBot = await db
@@ -126,8 +191,21 @@ export async function loginWithApiKey(input: LoginApiKeyInput): Promise<AuthResu
         botId = insertedBot.id;
     }
 
+    // Re-instantiate the client with the resolved debug flag so
+    // setWebhook (called inside safeRegisterWebhook) is logged too.
+    const client = new TelegramClient({
+        token: parsed.data.token,
+        debug: debugEnabled,
+        debugLabel: `bot:${botId}${me.username ? `:@${me.username}` : ""}`,
+    });
+    const warning = await safeRegisterWebhook(client, {
+        publicAppUrl: env.PUBLIC_APP_URL,
+        botId,
+        passwordHash,
+    });
+
     await issueSession({ userId, botId });
-    return { ok: true };
+    return warning ? { ok: true, warning } : { ok: true };
 }
 
 /**
@@ -253,8 +331,14 @@ export async function signup(input: SignupInput): Promise<AuthResult> {
         return { ok: false, error: "Failed to register bot" };
     }
 
+    const warning = await safeRegisterWebhook(client, {
+        publicAppUrl: env.PUBLIC_APP_URL,
+        botId: insertedBot.id,
+        passwordHash,
+    });
+
     await issueSession({ userId: insertedUser.id, botId: insertedBot.id });
-    return { ok: true };
+    return warning ? { ok: true, warning } : { ok: true };
 }
 
 export async function logout(): Promise<void> {

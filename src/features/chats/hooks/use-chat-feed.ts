@@ -18,12 +18,13 @@ export function useChatFeed(onSignal: () => void, opts?: { pollIntervalMs?: numb
     onSignalRef.current = onSignal;
 
     useEffect(() => {
-        // Cap consecutive failed opens before we give up on the WebSocket path
-        // for good. `next dev` cannot host the ChatFeedHub DO (Cloudflare's
-        // design for in-worker DOs), so the WS endpoint always 501s there —
-        // retrying just spams the console. Two attempts is enough to
-        // distinguish "transport truly unavailable" from a transient race.
-        const MAX_INITIAL_FAILURES = 2;
+        // One failed open is our cue to fall back to polling for good. We
+        // already probe `/api/chat-feed` before the first connect (see
+        // `probeAvailable` below), so if the browser still can't establish
+        // the WS the transport is truly broken — retrying just spams the
+        // console with a browser-native "connection failed" error we can't
+        // suppress from JS.
+        const MAX_INITIAL_FAILURES = 1;
 
         let disposed = false;
         let ws: WebSocket | null = null;
@@ -62,6 +63,28 @@ export function useChatFeed(onSignal: () => void, opts?: { pollIntervalMs?: numb
                 debounceTimer = null;
                 onSignalRef.current();
             }, 150);
+        };
+
+        // Cheap non-upgrade GET. The route always returns 200 (no red-tinted
+        // error in devtools) with a JSON body indicating which transport is
+        // available. On `next dev` + when the DO binding is absent → the
+        // body says `polling` and we skip the WS entirely. Only when the
+        // server signals `websocket` do we open the socket — otherwise the
+        // browser would emit its own "WebSocket connection failed" that we
+        // can't suppress from JS.
+        const probeAvailable = async (): Promise<boolean> => {
+            try {
+                const res = await fetch("/api/chat-feed", {
+                    method: "GET",
+                    credentials: "same-origin",
+                    cache: "no-store",
+                });
+                if (!res.ok) return false;
+                const body = (await res.json()) as { transport?: string };
+                return body.transport === "websocket";
+            } catch {
+                return false;
+            }
         };
 
         const connect = () => {
@@ -147,7 +170,18 @@ export function useChatFeed(onSignal: () => void, opts?: { pollIntervalMs?: numb
             }
         };
 
-        connect();
+        // Probe first; only open the socket if the server signals the DO is
+        // wired up. Otherwise disable WS permanently and rely on polling —
+        // avoids a guaranteed-to-fail WebSocket handshake in `next dev`.
+        probeAvailable().then((ok) => {
+            if (disposed) return;
+            if (!ok) {
+                wsPermanentlyDisabled = true;
+                startPolling();
+                return;
+            }
+            connect();
+        });
         document.addEventListener("visibilitychange", onVisibility);
 
         return () => {

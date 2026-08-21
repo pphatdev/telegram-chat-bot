@@ -20,10 +20,6 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth/session";
  */
 export async function GET(request: NextRequest) {
     try {
-        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-            return new NextResponse("Expected WebSocket upgrade", { status: 426 });
-        }
-
         const { env } = await getCloudflareContext({ async: true });
 
         const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -32,7 +28,36 @@ export async function GET(request: NextRequest) {
             return new NextResponse("Unauthorized", { status: 401 });
         }
 
-        if (!env.CHAT_FEED) {
+        // Detect whether this runtime can actually complete a WebSocket
+        // upgrade. Two independent conditions must hold:
+        //   1. `env.CHAT_FEED` binding must be defined.
+        //   2. `WebSocketPair` global must exist (Cloudflare Workers only).
+        //
+        // Under `next dev` (Node runtime), miniflare STILL surfaces the
+        // CHAT_FEED binding from wrangler.jsonc — but the DO isn't really
+        // reachable, and Node can't do a WS upgrade even if it were. Only
+        // the `WebSocketPair` check separates workerd from Node dev; the
+        // binding check alone is insufficient.
+        //
+        // Probe protocol: clients do a plain `fetch("/api/chat-feed")`
+        // first and read `transport` from the JSON body:
+        //   - `"websocket"` → the WS handshake will succeed here.
+        //   - `"polling"`   → skip WS entirely and fall back to polling.
+        //
+        // We return 200 in both cases so the browser devtools don't tint
+        // the probe row red. Only a real WS upgrade request path returns
+        // a 101 (via the DO) or a 401 (missing session).
+        const canUpgrade =
+            typeof (globalThis as { WebSocketPair?: unknown }).WebSocketPair !== "undefined";
+        const transportAvailable = Boolean(env.CHAT_FEED) && canUpgrade;
+
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+            return NextResponse.json({
+                transport: transportAvailable ? "websocket" : "polling",
+            });
+        }
+
+        if (!transportAvailable) {
             return new NextResponse("Realtime not available in this environment", {
                 status: 501,
             });

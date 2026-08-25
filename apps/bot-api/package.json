@@ -1,0 +1,9 @@
+{
+  "name": "@telegram-bot/bot-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scaffold for the bot-api (webhook + cron + dispatcher) service. Populated in Phase 3.",
+  "scripts": {
+    "placeholder": "echo 'apps/bot-api is a Phase 3 scaffold' && exit 0"
+  }
+}

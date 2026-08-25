@@ -1,7 +1,7 @@
 /**
  * Chat conversation background presets.
  *
- * Applied to `<section>` in `chat-shell.tsx` via two CSS custom properties
+ * Consumed by `chat-pane.tsx` via two CSS custom properties
  * (`--chat-bg-color`, `--chat-bg-image`) set on `documentElement`. Persisted
  * in `localStorage` under `CHAT_BG_STORAGE_KEY`. Presets use OKLCH with low
  * alpha so they read correctly against both light and dark themes without

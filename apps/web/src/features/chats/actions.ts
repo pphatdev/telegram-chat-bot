@@ -2,6 +2,7 @@
 
 import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import { getDbAsync } from "@/db/context";
 import { bots, chats, messages, users, type ChatRow, type MessageRow } from "@telegram-bot/shared/db/schema";
 import { readSession } from "@/lib/auth/session";
@@ -170,12 +171,24 @@ export type ReactResult = ActionResult<{ reactions: PersistedReaction[]; ownEmoj
  * two-step. Local persistence uses `applyBotReaction` so any existing user
  * counts on the same emoji survive the swap.
  */
+const reactMessageIdSchema = z.number().int().positive();
+/** Any legitimate Telegram bot reaction is a small emoji sequence.
+ *  Cap prevents huge-blob echoes in the error path + wasted downstream work. */
+const reactEmojiSchema = z.string().max(64);
+
 export async function reactToMessage(
     dbMessageId: number,
     nextEmoji: string | null,
 ): Promise<ReactResult> {
     const session = await readSession();
     if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
+
+    if (!reactMessageIdSchema.safeParse(dbMessageId).success) {
+        return { ok: false, error: "Invalid message id", code: "not_found" };
+    }
+    if (nextEmoji !== null && !reactEmojiSchema.safeParse(nextEmoji).success) {
+        return { ok: false, error: "Reaction rejected", code: "internal" };
+    }
 
     const db = await getDbAsync();
     const row = await db

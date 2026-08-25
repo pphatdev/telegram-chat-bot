@@ -41,6 +41,15 @@ const passcodeSchema = z
     .regex(/^\d{4,8}$/, "Passcode must be 4-8 digits");
 
 /**
+ * Length caps on password-material action inputs. PBKDF2 (via verifyPassword)
+ * is CPU-bound in the input length; capping at the boundary prevents a
+ * multi-MB blob from consuming worker CPU on obviously-invalid attempts.
+ * 1024 keeps room for very long passphrases; 64 covers any mistyped passcode.
+ */
+const accountPasswordSchema = z.string().max(1024);
+const passcodeAttemptSchema = z.string().max(64);
+
+/**
  * Session-guarded allowlist CRUD. Every action:
  *   1. Reads {userId, botId} from the session cookie.
  *   2. Constrains the row to that bot — one operator cannot inspect or
@@ -152,6 +161,10 @@ export async function setPasscode(
     const session = await readSession();
     if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
 
+    if (!accountPasswordSchema.safeParse(accountPassword).success) {
+        return { ok: false, error: "Invalid account password", code: "invalid" };
+    }
+
     const passcodeParsed = passcodeSchema.safeParse(passcode);
     if (!passcodeParsed.success) {
         return { ok: false, error: passcodeParsed.error.issues[0]?.message ?? "Invalid passcode", code: "invalid" };
@@ -189,6 +202,10 @@ export async function disablePasscode(
 ): Promise<SettingsResult<{ enabled: false }>> {
     const session = await readSession();
     if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
+
+    if (!accountPasswordSchema.safeParse(accountPassword).success) {
+        return { ok: false, error: "Invalid account password", code: "invalid" };
+    }
 
     const db = await getDbAsync();
     const user = await db
@@ -291,6 +308,10 @@ export async function verifyPasscode(
 ): Promise<SettingsResult<{ verified: true }>> {
     const session = await readSession();
     if (!session) return { ok: false, error: "Not signed in", code: "unauthenticated" };
+
+    if (!passcodeAttemptSchema.safeParse(passcode).success) {
+        return { ok: false, error: "Incorrect passcode", code: "invalid" };
+    }
 
     const db = await getDbAsync();
 

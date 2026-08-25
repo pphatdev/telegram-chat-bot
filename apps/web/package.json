@@ -1,0 +1,53 @@
+{
+  "name": "@telegram-bot/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web (dashboard UI) service — Next.js 16 + OpenNext on Cloudflare Workers.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "preview": "opennextjs-cloudflare build && pnpm run patch:worker && opennextjs-cloudflare preview",
+    "deploy": "opennextjs-cloudflare build && pnpm run patch:worker && opennextjs-cloudflare deploy",
+    "upload": "opennextjs-cloudflare build && pnpm run patch:worker && opennextjs-cloudflare upload",
+    "cf:build": "opennextjs-cloudflare build && pnpm run patch:worker",
+    "patch:worker": "node scripts/patch-open-next-worker.mjs",
+    "typegen": "next typegen",
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv cloudflare-env.d.ts",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.7.0",
+    "@hookform/resolvers": "^5.9.1",
+    "@opennextjs/cloudflare": "^1.20.2",
+    "@telegram-bot/shared": "workspace:*",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.45.2",
+    "lucide-react": "^1.32.0",
+    "next": "16.3.1",
+    "next-themes": "^0.4.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-hook-form": "^7.85.0",
+    "sonner": "^2.0.8",
+    "tailwind-merge": "^3.6.0",
+    "tw-animate-css": "^1.4.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.1",
+    "shadcn": "^4.18.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "wrangler": "^4.124.0"
+  }
+}

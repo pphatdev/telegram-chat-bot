@@ -1,5 +1,5 @@
 # Dependencies
-/node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -9,13 +9,13 @@
 !.yarn/versions
 
 # Next.js build output
-/.next/
+.next/
 /out/
 
 # OpenNext & Cloudflare Workers
-/.open-next/
-/.wrangler/
-/cloudflare-env.d.ts
+.open-next/
+.wrangler/
+cloudflare-env.d.ts
 
 # Production & Build outputs
 /build/

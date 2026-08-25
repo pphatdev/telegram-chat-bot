@@ -46,8 +46,8 @@ if (!localD1) {
 
 export default defineConfig({
     dialect: "sqlite",
-    schema: "./src/db/schema",
-    out: "./src/db/migrations",
+    schema: "./packages/shared/src/db/schema",
+    out: "./packages/shared/src/db/migrations",
     casing: "snake_case",
     strict: true,
     dbCredentials: {

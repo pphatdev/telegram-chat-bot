@@ -1,0 +1,99 @@
+/**
+ * Cloudflare Workers configuration for the Telegram Bot UI.
+ *
+ * OpenNext builds the Next.js app into `.open-next/worker.js` and emits static
+ * assets to `.open-next/assets`. This file wires the Worker up with the
+ * bindings the application depends on: D1 (persistence), R2 (media + ISR
+ * cache), and secret env vars that must never leak client-side.
+ *
+ * Local secret values live in `.dev.vars` (gitignored). Production secrets are
+ * managed via `wrangler secret put <NAME>`.
+ *
+ * See:
+ *  - https://developers.cloudflare.com/workers/wrangler/configuration/
+ *  - https://opennext.js.org/cloudflare/get-started
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "telegram-bot",
+	"main": ".open-next/worker.js",
+	"compatibility_date": "2026-08-20",
+	"compatibility_flags": [
+		"nodejs_compat",
+		// Ensures fetch() from Workers only calls public endpoints (SSRF hardening).
+		"global_fetch_strictly_public"
+	],
+	"observability": {
+		"enabled": true
+	},
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".open-next/assets"
+	},
+	// D1 — primary relational store (chats, contacts, broadcasts, allowlists,
+	// encrypted credentials). Create with:
+	//   npx wrangler d1 create telegram-bot-db
+	// Then paste the returned database_id below.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "telegram-bot-db",
+			"database_id": "f5b0d57d-c95a-4587-8d80-fe27b271464d",
+			"migrations_dir": "../../packages/shared/src/db/migrations"
+		},
+		{
+			"binding": "telegram_bot_db",
+			"database_name": "telegram-bot-db",
+			"database_id": "f5b0d57d-c95a-4587-8d80-fe27b271464d",
+			"remote": true
+		}
+	],
+	// R2 — media assets (photos, videos, stickers, documents) and OpenNext's
+	// incremental cache. Create with:
+	//   npx wrangler r2 bucket create telegram-bot-media
+	"r2_buckets": [
+		{
+			"binding": "R2",
+			"bucket_name": "telegram-bot-media"
+		}
+	],
+	// Realtime chat-list fanout. One ChatFeedHub instance per bot (routed via
+	// idFromName(String(botId))) holds the open WebSockets; the webhook
+	// notifies its hub after every persisted update.
+	//
+	// Deployment note: for the deployed worker to satisfy this binding, the
+	// ChatFeedHub class must be exported from the entry that wrangler builds.
+	// OpenNext's generated `.open-next/worker.js` does NOT re-export user DOs
+	// out of the box — you must either (a) append the export post-build, or
+	// (b) move the DO into a companion worker and add `script_name` here.
+	// In `next dev` the binding will be absent; the client detects that and
+	// falls back to its polling loop, so dev UX is unaffected.
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CHAT_FEED",
+				"class_name": "ChatFeedHub"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ChatFeedHub"]
+		}
+	],
+	// Cron trigger — sweep due scheduled broadcasts once per minute. Handled
+	// by the scheduled() export appended to `.open-next/worker.js` by
+	// `scripts/patch-open-next-worker.mjs`.
+	"triggers": {
+		"crons": ["* * * * *"]
+	},
+	// Non-secret runtime vars. Actual secret material
+	// (ENCRYPTION_SECRET, CRON_SECRET) is provisioned via
+	// `wrangler secret put` and referenced through `env` at runtime.
+	// The per-bot Telegram webhook secret is derived at runtime from
+	// `ENCRYPTION_SECRET + botId` — see `src/lib/telegram/webhook.ts`.
+	"vars": {
+		"NEXT_PUBLIC_APP_NAME": "Telegram Bot UI"
+	}
+}
